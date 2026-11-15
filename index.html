@@ -122,8 +122,9 @@
   .sync-status.err { color: var(--red); }
   details summary { cursor: pointer; font-weight: 600; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
-  /* Screenshot import */
+  /* Screenshot + PDF import */
   .import-drop {
+    display: block;
     border: 2px dashed var(--line); border-radius: 10px; padding: 18px 12px;
     text-align: center; cursor: pointer; background: var(--cream); margin-bottom: 10px;
   }
@@ -214,10 +215,13 @@
   </div>
 
   <div class="card">
-    <h2>Import from screenshot</h2>
-    <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement or transactions list. The text is read on this device — the image is never uploaded anywhere.</p>
+    <h2>Import from screenshot or PDF</h2>
+    <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement, or upload the statement PDF. The text is read on this device — the file is never uploaded anywhere.</p>
     <label class="import-drop" for="importImage">📷 Tap to choose a screenshot
       <input type="file" id="importImage" accept="image/*" style="display:none">
+    </label>
+    <label class="import-drop" for="importPdf">📄 Tap to choose a PDF statement
+      <input type="file" id="importPdf" accept="application/pdf,.pdf" style="display:none">
     </label>
     <div class="import-status" id="importStatus"></div>
     <div id="previewList"></div>
@@ -558,7 +562,7 @@
     });
   });
 
-  // ---- screenshot import (in-browser OCR, nothing uploaded) ----
+  // ---- screenshot + PDF import (read on-device, nothing uploaded) ----
   var importStatus = $("importStatus"), previewList = $("previewList"), previewActions = $("previewActions");
   var parsedRows = []; // {date, desc, amount, type, category, dup, checked}
   var MONTH_NAMES = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
@@ -706,6 +710,104 @@
     return tryNext(0);
   }
 
+  // Shared finish for screenshot + PDF: parsed rows -> preview table + status.
+  // Returns true if any rows were found.
+  function finishImport(rows) {
+    if (!rows.length) return false;
+    parsedRows = rows.map(function (r) {
+      r.dup = isDuplicate(r);
+      r.checked = !r.dup;
+      return r;
+    });
+    var dups = parsedRows.filter(function (r) { return r.dup; }).length;
+    showImport("Found " + parsedRows.length + " transaction" + (parsedRows.length === 1 ? "" : "s") +
+      (dups ? " (" + dups + (dups === 1 ? " looks" : " look") + " like duplicates — unchecked)" : "") + ". Check the categories, then add.", "ok");
+    renderPreview();
+    return true;
+  }
+
+  function loadPdfjs() {
+    if (window.pdfjsLib) return Promise.resolve();
+    var sources = [
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js",
+      "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"
+    ];
+    var workers = [
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js",
+      "https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js"
+    ];
+    function tryNext(i) {
+      if (i >= sources.length) return Promise.reject(new Error("Could not load the PDF reader (needs internet)."));
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = sources[i];
+        s.onload = function () {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = workers[i];
+          resolve();
+        };
+        s.onerror = function () { tryNext(i + 1).then(resolve, reject); };
+        document.head.appendChild(s);
+      });
+    }
+    return tryNext(0);
+  }
+
+  // Turn a PDF.js textContent into plain lines, grouping items by their
+  // y position (transform[5]) so the parser sees one transaction per line,
+  // like OCR output. hasEOL is not reliable across statement PDFs, so
+  // position is the source of truth.
+  function textContentToLines(tc) {
+    var items = tc.items.filter(function (it) { return it.str && it.str.trim(); });
+    // Top of page first (y desc), then left to right (x asc).
+    items.sort(function (a, b) {
+      var dy = b.transform[5] - a.transform[5];
+      if (dy !== 0) return dy;
+      return a.transform[4] - b.transform[4];
+    });
+    var lines = [], line = null, lineY = 0;
+    items.forEach(function (it) {
+      var y = it.transform[5];
+      if (line === null || Math.abs(y - lineY) > 4) {
+        line = { parts: [it] };
+        lines.push(line);
+        lineY = y;
+      } else {
+        line.parts.push(it);
+      }
+    });
+    return lines.map(function (l) {
+      l.parts.sort(function (a, b) { return a.transform[4] - b.transform[4]; });
+      return l.parts.map(function (it) { return it.str; }).join(" ").replace(/\s+/g, " ").trim();
+    }).join("\n");
+  }
+
+  // Scanned-PDF fallback: render each page to a canvas and OCR it.
+  // Caps at 15 pages — longer statements are almost always text PDFs.
+  function ocrPdfPages(pdf) {
+    var total = Math.min(pdf.numPages, 15);
+    var texts = [];
+    var chain = Promise.resolve();
+    for (var n = 1; n <= total; n++) {
+      (function (pageNum) {
+        chain = chain.then(function () {
+          showImport("Reading page " + pageNum + " of " + total + " as an image…");
+          return pdf.getPage(pageNum).then(function (page) {
+            var viewport = page.getViewport({ scale: 2 });
+            var canvas = document.createElement("canvas");
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            return page.render({ canvasContext: canvas.getContext("2d"), viewport: viewport }).promise.then(function () {
+              return window.Tesseract.recognize(canvas, "eng");
+            }).then(function (result) {
+              texts[pageNum - 1] = result.data.text || "";
+            });
+          });
+        });
+      })(n);
+    }
+    return chain.then(function () { return texts.join("\n"); });
+  }
+
   function showImport(msg, cls) { importStatus.textContent = msg; importStatus.className = "import-status " + (cls || ""); }
 
   $("importImage").addEventListener("change", function (e) {
@@ -722,22 +824,54 @@
         }
       });
     }).then(function (result) {
-      var rows = parseStatementText(result.data.text || "");
-      if (!rows.length) {
+      if (!finishImport(parseStatementText(result.data.text || ""))) {
         showImport("No transactions found in that image. Try a clearer screenshot showing one transaction per line with dates and amounts.", "err");
-        return;
       }
-      parsedRows = rows.map(function (r) {
-        r.dup = isDuplicate(r);
-        r.checked = !r.dup;
-        return r;
-      });
-      var dups = parsedRows.filter(function (r) { return r.dup; }).length;
-      showImport("Found " + parsedRows.length + " transaction" + (parsedRows.length === 1 ? "" : "s") +
-        (dups ? " (" + dups + (dups === 1 ? " looks" : " look") + " like duplicates — unchecked)" : "") + ". Check the categories, then add.", "ok");
-      renderPreview();
     }).catch(function (err) {
       showImport("Could not read that image: " + err.message, "err");
+    });
+  });
+
+  $("importPdf").addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    parsedRows = [];
+    renderPreview();
+    showImport("Reading the PDF…");
+    loadPdfjs().then(function () {
+      return file.arrayBuffer();
+    }).then(function (buf) {
+      return window.pdfjsLib.getDocument({ data: buf }).promise;
+    }).then(function (pdf) {
+      var texts = [];
+      var chain = Promise.resolve();
+      for (var n = 1; n <= pdf.numPages; n++) {
+        (function (pageNum) {
+          chain = chain.then(function () {
+            showImport("Reading the PDF… page " + pageNum + " of " + pdf.numPages);
+            return pdf.getPage(pageNum).then(function (page) {
+              return page.getTextContent().then(function (tc) {
+                texts[pageNum - 1] = textContentToLines(tc);
+              });
+            });
+          });
+        })(n);
+      }
+      return chain.then(function () { return { pdf: pdf, text: texts.join("\n") }; });
+    }).then(function (res) {
+      if (finishImport(parseStatementText(res.text))) return;
+      // No usable text layer — likely a scanned PDF. Fall back to OCR.
+      showImport("No text found in this PDF — it looks scanned. Reading pages as images… (first use downloads the text reader, ~10MB)");
+      return loadTesseract().then(function () {
+        return ocrPdfPages(res.pdf);
+      }).then(function (ocrText) {
+        if (!finishImport(parseStatementText(ocrText))) {
+          showImport("No transactions found in that PDF. Try a statement showing one transaction per line with dates and amounts.", "err");
+        }
+      });
+    }).catch(function (err) {
+      showImport("Could not read that PDF: " + err.message, "err");
     });
   });
 
