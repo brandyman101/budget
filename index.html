@@ -281,7 +281,7 @@
 (function () {
   "use strict";
   var STORE_KEY = "budget-tracker-v1";
-  var DEFAULT_CATS = ["Groceries", "Rent", "Dining", "Transport", "Utilities", "Entertainment", "Health", "Other"];
+  var DEFAULT_CATS = ["Groceries", "Rent", "Dining", "Transport", "Travel", "Utilities", "Entertainment", "Health", "Other"];
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   var state = load();
@@ -291,13 +291,30 @@
   viewMonth = now.getMonth();
   var entryType = "expense";
 
+  // Add any default categories missing from a saved list (e.g. Travel,
+  // added after the data was first saved), in their default position:
+  // before the next default category already in the list, else at the end.
+  function ensureDefaultCats(cats) {
+    DEFAULT_CATS.forEach(function (c) {
+      if (cats.indexOf(c) !== -1) return;
+      var at = -1;
+      for (var i = DEFAULT_CATS.indexOf(c) + 1; i < DEFAULT_CATS.length; i++) {
+        var nextAt = cats.indexOf(DEFAULT_CATS[i]);
+        if (nextAt !== -1) { at = nextAt; break; }
+      }
+      if (at === -1) at = cats.length;
+      cats.splice(at, 0, c);
+    });
+    return cats;
+  }
+
   function load() {
     try {
       var raw = localStorage.getItem(STORE_KEY);
       if (raw) {
         var d = JSON.parse(raw);
         d.txs = d.txs || [];
-        d.categories = d.categories || DEFAULT_CATS.slice();
+        d.categories = ensureDefaultCats(d.categories || DEFAULT_CATS.slice());
         d.budgets = d.budgets || {};
         d.sync = d.sync || {};
         return d;
@@ -501,7 +518,7 @@
       try {
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
-        state = { txs: d.txs, categories: d.categories || DEFAULT_CATS.slice(), budgets: d.budgets || {}, sync: d.sync || state.sync };
+        state = { txs: d.txs, categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync };
         save(); renderCategories(); render();
         alert("Imported " + state.txs.length + " transactions.");
       } catch (err) { alert("That file could not be imported."); }
@@ -568,8 +585,9 @@
   var MONTH_NAMES = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
   var CAT_KEYWORDS = [
     ["Groceries", ["aron", "kissena", "supermarket", "grocery", "groceries", "food market", "stop & shop", "stop and shop", "trader joe", "whole foods", "key food", "c-town", "ctown", "costco", "bj's", "aldi", "foodtown", "shoprite", "fairway"]],
-    ["Dining", ["restaurant", "cafe", "coffee", "pizza", "starbucks", "dunkin", "chipotle", "mcdonald", "burger", "sushi", "grill", "bakery", "bagel", "deli", "eatery", "kitchen", "tacos", "thai", "chinese", "diners", "brunch", "bistro", "pizzeria"]],
+    ["Dining", ["uber eats", "ubereats", "doordash", "grubhub", "seamless", "restaurant", "cafe", "coffee", "pizza", "starbucks", "dunkin", "chipotle", "mcdonald", "burger", "sushi", "grill", "bakery", "bagel", "deli", "eatery", "kitchen", "tacos", "thai", "chinese", "diners", "brunch", "bistro", "pizzeria"]],
     ["Transport", ["uber", "lyft", "shell", "exxon", "mobil", "chevron", "sunoco", "mta", "metrocard", "parking", "e-zpass", "ezpass", "toll", "delta air", "jetblue", "united air", "amtrak", "citibike"]],
+    ["Travel", ["hotel", "motel", "airbnb", "vrbo", "marriott", "hilton", "hyatt", "expedia", "booking.com", "kayak", "priceline", "agoda", "resort", "lodge", "hostel", "tripadvisor", "vacation rental"]],
     ["Utilities", ["con ed", "coned", "national grid", "verizon", "t-mobile", "tmobile", "at&t", "optimum", "spectrum", "water bill", "electric", "internet", "phone bill"]],
     ["Health", ["pharmacy", "cvs", "walgreens", "duane reade", "rite aid", "dentist", "dental", "doctor", "medical", "urgent care", "optical", "vision"]],
     ["Entertainment", ["netflix", "spotify", "hulu", "disney+", "movie", "amc", "regal", "ticketmaster", "concert", "show", "museum", "zoo", "aquarium"]],
