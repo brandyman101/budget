@@ -122,6 +122,28 @@
   .sync-status.err { color: var(--red); }
   details summary { cursor: pointer; font-weight: 600; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
+  /* Screenshot import */
+  .import-drop {
+    border: 2px dashed var(--line); border-radius: 10px; padding: 18px 12px;
+    text-align: center; cursor: pointer; background: var(--cream); margin-bottom: 10px;
+  }
+  .import-drop:hover { border-color: var(--terra); }
+  .import-status { font-size: 0.9rem; color: var(--muted); margin: 8px 0; min-height: 1.2em; }
+  .import-status.err { color: var(--red); }
+  .import-status.ok { color: var(--green); }
+  .preview-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 0.92rem;
+  }
+  .preview-row:last-child { border-bottom: none; }
+  .preview-row input[type="checkbox"] { width: 18px; height: 18px; flex: none; }
+  .preview-main { flex: 1; min-width: 0; }
+  .preview-desc { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .preview-date { font-size: 0.8rem; color: var(--muted); }
+  .preview-amt { font-weight: 700; white-space: nowrap; }
+  .preview-row select { width: 120px; flex: none; padding: 6px; font-size: 0.85rem; }
+  .preview-dup { font-size: 0.75rem; color: var(--amber); font-weight: 700; }
+  .preview-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   @media (max-width: 480px) {
     .balance-box .value { font-size: 1.1rem; }
     .form-row { flex-direction: column; }
@@ -188,6 +210,20 @@
     <div class="budget-edit">
       <input type="text" id="newCategory" placeholder="New category name">
       <button class="btn-secondary" id="addCategory">Add category</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Import from screenshot</h2>
+    <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement or transactions list. The text is read on this device — the image is never uploaded anywhere.</p>
+    <label class="import-drop" for="importImage">📷 Tap to choose a screenshot
+      <input type="file" id="importImage" accept="image/*" style="display:none">
+    </label>
+    <div class="import-status" id="importStatus"></div>
+    <div id="previewList"></div>
+    <div class="preview-actions" id="previewActions" style="display:none">
+      <button class="btn-primary" id="importSelected" style="flex:1">Add selected to tracker</button>
+      <button class="btn-secondary" id="importClear">Clear</button>
     </div>
   </div>
 
@@ -380,7 +416,7 @@
         var sign = t.type === "income" ? "+" : "−";
         return '<div class="tx"><div class="tx-main"><span class="tx-cat">' + esc(t.category) + '</span>' +
           '<span class="tx-note">' + esc(t.date) + (t.note ? " · " + esc(t.note) : "") + '</span></div>' +
-          '<div class="tx-right"><span class="tx-amt ' + (t.type === "income" ? "inc" : "exp") + '">' + sign + money(t.amount).slice(1).replace(/^/, "$") + '</span>' +
+          '<div class="tx-right"><span class="tx-amt ' + (t.type === "income" ? "inc" : "exp") + '">' + sign + money(Math.abs(t.amount)) + '</span>' +
           '<button class="tx-del" data-id="' + t.id + '" aria-label="Delete">×</button></div></div>';
       }).join("");
       txList.querySelectorAll(".tx-del").forEach(function (btn) {
@@ -520,6 +556,216 @@
     }).catch(function (err) {
       showSync("Sync failed: " + err.message, "err");
     });
+  });
+
+  // ---- screenshot import (in-browser OCR, nothing uploaded) ----
+  var importStatus = $("importStatus"), previewList = $("previewList"), previewActions = $("previewActions");
+  var parsedRows = []; // {date, desc, amount, type, category, dup, checked}
+  var MONTH_NAMES = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
+  var CAT_KEYWORDS = [
+    ["Groceries", ["aron", "kissena", "supermarket", "grocery", "groceries", "food market", "stop & shop", "stop and shop", "trader joe", "whole foods", "key food", "c-town", "ctown", "costco", "bj's", "aldi", "foodtown", "shoprite", "fairway"]],
+    ["Dining", ["restaurant", "cafe", "coffee", "pizza", "starbucks", "dunkin", "chipotle", "mcdonald", "burger", "sushi", "grill", "bakery", "bagel", "deli", "eatery", "kitchen", "tacos", "thai", "chinese", "diners", "brunch", "bistro", "pizzeria"]],
+    ["Transport", ["uber", "lyft", "shell", "exxon", "mobil", "chevron", "sunoco", "mta", "metrocard", "parking", "e-zpass", "ezpass", "toll", "delta air", "jetblue", "united air", "amtrak", "citibike"]],
+    ["Utilities", ["con ed", "coned", "national grid", "verizon", "t-mobile", "tmobile", "at&t", "optimum", "spectrum", "water bill", "electric", "internet", "phone bill"]],
+    ["Health", ["pharmacy", "cvs", "walgreens", "duane reade", "rite aid", "dentist", "dental", "doctor", "medical", "urgent care", "optical", "vision"]],
+    ["Entertainment", ["netflix", "spotify", "hulu", "disney+", "movie", "amc", "regal", "ticketmaster", "concert", "show", "museum", "zoo", "aquarium"]],
+    ["Rent", ["rent", "landlord", "property mgmt", "property management", "apartment"]]
+  ];
+  var SKIP_LINE = /^(date|description|amount|transactions?|activity|statement|balance|total|payment due|minimum payment|previous balance|new balance|payments? and credits?|thank you|autopay|auto pay|ending balance|beginning balance)\b/i;
+
+  function guessCategory(desc) {
+    var d = desc.toLowerCase();
+    for (var i = 0; i < CAT_KEYWORDS.length; i++) {
+      for (var j = 0; j < CAT_KEYWORDS[i][1].length; j++) {
+        if (d.indexOf(CAT_KEYWORDS[i][1][j]) !== -1) return CAT_KEYWORDS[i][0];
+      }
+    }
+    return "Other";
+  }
+
+  // Parse a date from the start of a line. Returns YYYY-MM-DD or null.
+  function parseLineDate(text) {
+    var m, y = new Date().getFullYear(), mo, day;
+    // 11/10/2026 or 11/10/26 or 11/10
+    m = text.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?/);
+    if (m) {
+      mo = parseInt(m[1], 10) - 1; day = parseInt(m[2], 10);
+      if (m[3]) { y = parseInt(m[3], 10); if (y < 100) y += 2000; }
+      if (mo >= 0 && mo < 12 && day >= 1 && day <= 31) return y + "-" + String(mo + 1).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+      return null;
+    }
+    // Nov 10, 2026 / Nov 10 / 10 Nov 2026
+    m = text.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?/);
+    if (m && MONTH_NAMES[m[1].toLowerCase().slice(0, 3)] !== undefined) {
+      mo = MONTH_NAMES[m[1].toLowerCase().slice(0, 3)]; day = parseInt(m[2], 10);
+      if (m[3]) y = parseInt(m[3], 10);
+      return y + "-" + String(mo + 1).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+    }
+    m = text.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\.?(?:,?\s+(\d{4}))?/);
+    if (m && MONTH_NAMES[m[2].toLowerCase().slice(0, 3)] !== undefined) {
+      day = parseInt(m[1], 10); mo = MONTH_NAMES[m[2].toLowerCase().slice(0, 3)];
+      if (m[3]) y = parseInt(m[3], 10);
+      return y + "-" + String(mo + 1).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+    }
+    return null;
+  }
+
+  function parseStatementText(text) {
+    var rows = [];
+    var lines = text.split(/\r?\n/);
+    var lastDate = null;
+    lines.forEach(function (rawLine) {
+      var line = rawLine.replace(/\s+/g, " ").trim();
+      if (!line || line.length < 4) return;
+      if (SKIP_LINE.test(line)) return;
+      if (/\b(payment|autopay|auto pay)\b/i.test(line)) return; // card payments, not spending
+      // amount at end of line: $1,234.56 or 1234.56, optional trailing - or CR
+      var am = line.match(/\$?\s?([\d,]+\.\d{2})\s*(-|CR)?\s*$/i);
+      if (!am) return;
+      var amount = parseFloat(am[1].replace(/,/g, ""));
+      if (!amount || amount <= 0) return;
+      var isCredit = !!am[2] || /-\s*\$?\s*[\d,]+\.\d{2}\s*$/.test(line) || /\(\$?[\d,]+\.\d{2}\)\s*$/.test(line) || /\brefund\b|\breturn\b|\bcredit\b/i.test(line);
+      var date = parseLineDate(line);
+      if (date) lastDate = date;
+      var desc = line
+        .replace(/^(\d{1,2}\/\d{1,2}(\/\d{2,4})?)/, "")
+        .replace(/^([A-Za-z]{3,9}\.?\s+\d{1,2}(,?\s+\d{4})?)/, "")
+        .replace(/^(\d{1,2}\s+[A-Za-z]{3,9}\.?(,?\s+\d{4})?)/, "")
+        .replace(/\$?\s?[\d,]+\.\d{2}\s*(-|CR)?\s*$/i, "")
+        .replace(/[•·|]+/g, " ").replace(/\s+/g, " ").trim()
+        .replace(/^[-–—\s]+|[-–—\s]+$/g, "");
+      if (!desc || desc.length < 2) return;
+      if (/^(total|balance|payment)\b/i.test(desc)) return;
+      rows.push({
+        date: date || lastDate || new Date().toISOString().slice(0, 10),
+        desc: desc,
+        amount: amount,
+        type: isCredit ? "income" : "expense",
+        category: isCredit ? "Other" : guessCategory(desc),
+        note: isCredit ? "Refund/credit: " + desc : ""
+      });
+    });
+    // de-dupe within the screenshot itself (same date + amount + desc)
+    var seen = {};
+    return rows.filter(function (r) {
+      var k = r.date + "|" + r.amount + "|" + r.desc.toLowerCase();
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+  }
+
+  function isDuplicate(r) {
+    return state.txs.some(function (t) {
+      return t.date === r.date && Math.abs(t.amount - r.amount) < 0.005 && t.type === r.type;
+    });
+  }
+
+  function renderPreview() {
+    if (!parsedRows.length) {
+      previewList.innerHTML = "";
+      previewActions.style.display = "none";
+      return;
+    }
+    previewList.innerHTML = parsedRows.map(function (r, i) {
+      var opts = state.categories.map(function (c) {
+        return '<option value="' + esc(c) + '"' + (c === r.category ? " selected" : "") + ">" + esc(c) + "</option>";
+      }).join("");
+      return '<div class="preview-row">' +
+        '<input type="checkbox" data-i="' + i + '"' + (r.checked ? " checked" : "") + ">" +
+        '<div class="preview-main"><div class="preview-desc">' + esc(r.desc) + "</div>" +
+        '<div class="preview-date">' + esc(r.date) + (r.dup ? ' · <span class="preview-dup">possible duplicate</span>' : "") + "</div></div>" +
+        '<span class="preview-amt">' + (r.type === "income" ? "+" : "−") + money(r.amount) + "</span>" +
+        '<select data-cat="' + i + '">' + opts + "</select></div>";
+    }).join("");
+    previewList.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
+      cb.addEventListener("change", function () { parsedRows[parseInt(cb.getAttribute("data-i"), 10)].checked = cb.checked; });
+    });
+    previewList.querySelectorAll("select[data-cat]").forEach(function (sel) {
+      sel.addEventListener("change", function () { parsedRows[parseInt(sel.getAttribute("data-cat"), 10)].category = sel.value; });
+    });
+    previewActions.style.display = "flex";
+  }
+
+  function loadTesseract() {
+    if (window.Tesseract) return Promise.resolve();
+    var sources = [
+      "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js",
+      "https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"
+    ];
+    function tryNext(i) {
+      if (i >= sources.length) return Promise.reject(new Error("Could not load the text reader (needs internet)."));
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.src = sources[i];
+        s.onload = resolve;
+        s.onerror = function () { tryNext(i + 1).then(resolve, reject); };
+        document.head.appendChild(s);
+      });
+    }
+    return tryNext(0);
+  }
+
+  function showImport(msg, cls) { importStatus.textContent = msg; importStatus.className = "import-status " + (cls || ""); }
+
+  $("importImage").addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    parsedRows = [];
+    renderPreview();
+    showImport("Reading the image… (first use downloads the text reader, ~10MB)");
+    loadTesseract().then(function () {
+      return window.Tesseract.recognize(file, "eng", {
+        logger: function (m) {
+          if (m.status === "recognizing text") showImport("Reading the image… " + Math.round(m.progress * 100) + "%");
+        }
+      });
+    }).then(function (result) {
+      var rows = parseStatementText(result.data.text || "");
+      if (!rows.length) {
+        showImport("No transactions found in that image. Try a clearer screenshot showing one transaction per line with dates and amounts.", "err");
+        return;
+      }
+      parsedRows = rows.map(function (r) {
+        r.dup = isDuplicate(r);
+        r.checked = !r.dup;
+        return r;
+      });
+      var dups = parsedRows.filter(function (r) { return r.dup; }).length;
+      showImport("Found " + parsedRows.length + " transaction" + (parsedRows.length === 1 ? "" : "s") +
+        (dups ? " (" + dups + (dups === 1 ? " looks" : " look") + " like duplicates — unchecked)" : "") + ". Check the categories, then add.", "ok");
+      renderPreview();
+    }).catch(function (err) {
+      showImport("Could not read that image: " + err.message, "err");
+    });
+  });
+
+  $("importSelected").addEventListener("click", function () {
+    var picked = parsedRows.filter(function (r) { return r.checked; });
+    if (!picked.length) { showImport("Nothing selected.", "err"); return; }
+    var base = Date.now();
+    picked.forEach(function (r, i) {
+      state.txs.push({
+        id: base + i,
+        type: r.type,
+        amount: r.amount,
+        category: r.type === "income" ? "Income" : r.category,
+        date: r.date,
+        note: r.note || r.desc
+      });
+    });
+    save();
+    parsedRows = [];
+    renderPreview();
+    showImport("Added " + picked.length + " transaction" + (picked.length === 1 ? "" : "s") + " to the tracker.", "ok");
+    render();
+  });
+
+  $("importClear").addEventListener("click", function () {
+    parsedRows = [];
+    renderPreview();
+    showImport("");
   });
 
   // init
