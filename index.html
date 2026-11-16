@@ -308,6 +308,23 @@
     return cats;
   }
 
+  // ---- sync freshness ----
+  // The Worker keeps whichever sync carries the newest timestamp. The app
+  // used to send Date.now() on every sync, so an empty device syncing after
+  // a full one overwrote the server copy with nothing — a second device
+  // could never pull data down. Now the app sends "now" only when local
+  // data changed since the last sync (dirty); otherwise it sends the last
+  // sync time, letting the server's newer copy win.
+  function hasLocalData(d) {
+    return (d.txs && d.txs.length > 0) ||
+      (d.budgets && Object.keys(d.budgets).length > 0) ||
+      (d.categories && d.categories.length > DEFAULT_CATS.length);
+  }
+  function markDirty() { state.sync.dirty = true; }
+  function syncTimestamp() {
+    return state.sync.dirty ? Date.now() : (state.sync.lastSyncAt || 0);
+  }
+
   function load() {
     try {
       var raw = localStorage.getItem(STORE_KEY);
@@ -317,6 +334,9 @@
         d.categories = ensureDefaultCats(d.categories || DEFAULT_CATS.slice());
         d.budgets = d.budgets || {};
         d.sync = d.sync || {};
+        // State saved before the dirty flag existed: treat existing local
+        // data as unsynced (push it), an empty device as clean (pull).
+        if (d.sync.dirty === undefined) d.sync.dirty = hasLocalData(d);
         return d;
       }
     } catch (e) { /* corrupted storage: start fresh */ }
@@ -443,6 +463,7 @@
       txList.querySelectorAll(".tx-del").forEach(function (btn) {
         btn.addEventListener("click", function () {
           state.txs = state.txs.filter(function (t) { return String(t.id) !== btn.getAttribute("data-id"); });
+          markDirty();
           save(); render();
         });
       });
@@ -472,13 +493,14 @@
     var d = new Date(date + "T12:00:00");
     viewYear = d.getFullYear(); viewMonth = d.getMonth();
     amountEl.value = ""; noteEl.value = "";
+    markDirty();
     save(); render();
   });
 
   $("addCategory").addEventListener("click", function () {
     var name = $("newCategory").value.trim();
     if (!name) return;
-    if (state.categories.indexOf(name) === -1) state.categories.push(name);
+    if (state.categories.indexOf(name) === -1) { state.categories.push(name); markDirty(); }
     $("newCategory").value = "";
     save(); renderCategories(); render();
     categoryEl.value = name;
@@ -491,6 +513,7 @@
     state.budgets[cat] = state.budgets[cat] || {};
     state.budgets[cat][monthKey(viewYear, viewMonth)] = Math.round(amt * 100) / 100;
     $("budgetAmount").value = "";
+    markDirty();
     save(); render();
   });
 
@@ -519,6 +542,7 @@
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
         state = { txs: d.txs, categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync };
+        state.sync.dirty = true;
         save(); renderCategories(); render();
         alert("Imported " + state.txs.length + " transactions.");
       } catch (err) { alert("That file could not be imported."); }
@@ -547,37 +571,43 @@
     fetch(url + "/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + secret },
-      body: JSON.stringify({ data: { txs: state.txs, categories: state.categories, budgets: state.budgets }, clientUpdatedAt: Date.now() })
+      body: JSON.stringify({ data: { txs: state.txs, categories: state.categories, budgets: state.budgets }, clientUpdatedAt: syncTimestamp() })
     }).then(function (res) {
       if (res.status === 401 || res.status === 403) throw new Error("Worker rejected the secret (unauthorized).");
       if (!res.ok) throw new Error("Worker returned HTTP " + res.status + ".");
       return res.json();
     }).then(function (remote) {
-      if (remote && remote.data && Array.isArray(remote.data.txs)) {
-        // last-write-wins by updated timestamp; fall back to merging by id
-        var mine = state.txs.length, theirs = remote.data.txs.length;
-        if ((remote.updatedAt || 0) > (state.sync.lastSyncAt || 0) && theirs >= mine) {
-          state.txs = remote.data.txs;
-          state.categories = remote.data.categories || state.categories;
-          state.budgets = remote.data.budgets || state.budgets;
-        } else {
-          var byId = {};
-          state.txs.concat(remote.data.txs).forEach(function (t) { byId[t.id] = t; });
-          state.txs = Object.keys(byId).map(function (k) { return byId[k]; });
-          (remote.data.categories || []).forEach(function (c) { if (state.categories.indexOf(c) === -1) state.categories.push(c); });
-          Object.keys(remote.data.budgets || {}).forEach(function (cat) {
-            state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
-          });
-        }
-      }
-      state.sync.lastSync = new Date().toLocaleString();
-      state.sync.lastSyncAt = Date.now();
-      save(); renderCategories(); render();
+      applyRemoteData(remote);
       showSync("Synced " + state.sync.lastSync + ".", "ok");
     }).catch(function (err) {
       showSync("Sync failed: " + err.message, "err");
     });
   });
+
+  // Adopt the server's copy when it is newer than what this device last
+  // saw; otherwise merge by id so unsynced local additions survive.
+  function applyRemoteData(remote) {
+    if (remote && remote.data && Array.isArray(remote.data.txs)) {
+      var mine = state.txs.length, theirs = remote.data.txs.length;
+      if ((remote.updatedAt || 0) > (state.sync.lastSyncAt || 0) && theirs >= mine) {
+        state.txs = remote.data.txs;
+        state.categories = remote.data.categories || state.categories;
+        state.budgets = remote.data.budgets || state.budgets;
+      } else {
+        var byId = {};
+        state.txs.concat(remote.data.txs).forEach(function (t) { byId[t.id] = t; });
+        state.txs = Object.keys(byId).map(function (k) { return byId[k]; });
+        (remote.data.categories || []).forEach(function (c) { if (state.categories.indexOf(c) === -1) state.categories.push(c); });
+        Object.keys(remote.data.budgets || {}).forEach(function (cat) {
+          state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
+        });
+      }
+    }
+    state.sync.lastSync = new Date().toLocaleString();
+    state.sync.lastSyncAt = Date.now();
+    state.sync.dirty = false;
+    save(); renderCategories(); render();
+  }
 
   // ---- screenshot + PDF import (read on-device, nothing uploaded) ----
   var importStatus = $("importStatus"), previewList = $("previewList"), previewActions = $("previewActions");
@@ -907,6 +937,7 @@
         note: r.note || r.desc
       });
     });
+    markDirty();
     save();
     parsedRows = [];
     renderPreview();
