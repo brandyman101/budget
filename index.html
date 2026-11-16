@@ -216,12 +216,12 @@
 
   <div class="card">
     <h2>Import from screenshot or PDF</h2>
-    <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement, or upload the statement PDF. The text is read on this device — the file is never uploaded anywhere.</p>
+    <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement, or upload statement PDFs — you can pick several at once. The text is read on this device — your files are never uploaded anywhere.</p>
     <label class="import-drop" for="importImage">📷 Tap to choose a screenshot
       <input type="file" id="importImage" accept="image/*" style="display:none">
     </label>
-    <label class="import-drop" for="importPdf">📄 Tap to choose a PDF statement
-      <input type="file" id="importPdf" accept="application/pdf,.pdf" style="display:none">
+    <label class="import-drop" for="importPdf">📄 Tap to choose PDF statements
+      <input type="file" id="importPdf" accept="application/pdf,.pdf" multiple style="display:none">
     </label>
     <div class="import-status" id="importStatus"></div>
     <div id="previewList"></div>
@@ -880,16 +880,10 @@
     });
   });
 
-  $("importPdf").addEventListener("change", function (e) {
-    var file = e.target.files[0];
-    e.target.value = "";
-    if (!file) return;
-    parsedRows = [];
-    renderPreview();
-    showImport("Reading the PDF…");
-    loadPdfjs().then(function () {
-      return file.arrayBuffer();
-    }).then(function (buf) {
+  // Read one PDF file to plain text: text layer first, OCR fallback for
+  // scanned pages. Returns a promise for the text.
+  function readPdfFile(file) {
+    return file.arrayBuffer().then(function (buf) {
       return window.pdfjsLib.getDocument({ data: buf }).promise;
     }).then(function (pdf) {
       var texts = [];
@@ -897,7 +891,6 @@
       for (var n = 1; n <= pdf.numPages; n++) {
         (function (pageNum) {
           chain = chain.then(function () {
-            showImport("Reading the PDF… page " + pageNum + " of " + pdf.numPages);
             return pdf.getPage(pageNum).then(function (page) {
               return page.getTextContent().then(function (tc) {
                 texts[pageNum - 1] = textContentToLines(tc);
@@ -908,18 +901,55 @@
       }
       return chain.then(function () { return { pdf: pdf, text: texts.join("\n") }; });
     }).then(function (res) {
-      if (finishImport(parseStatementText(res.text))) return;
+      if (parseStatementText(res.text).length) return res.text;
       // No usable text layer — likely a scanned PDF. Fall back to OCR.
-      showImport("No text found in this PDF — it looks scanned. Reading pages as images… (first use downloads the text reader, ~10MB)");
+      showImport("No text found in " + file.name + " — it looks scanned. Reading pages as images… (first use downloads the text reader, ~10MB)");
       return loadTesseract().then(function () {
         return ocrPdfPages(res.pdf);
-      }).then(function (ocrText) {
-        if (!finishImport(parseStatementText(ocrText))) {
-          showImport("No transactions found in that PDF. Try a statement showing one transaction per line with dates and amounts.", "err");
-        }
       });
+    });
+  }
+
+  $("importPdf").addEventListener("change", function (e) {
+    var files = Array.prototype.slice.call(e.target.files);
+    e.target.value = "";
+    if (!files.length) return;
+    parsedRows = [];
+    renderPreview();
+    showImport("Reading " + files.length + " PDF" + (files.length === 1 ? "" : "s") + "…");
+    loadPdfjs().then(function () {
+      var allText = [];
+      var errors = [];
+      var chain = Promise.resolve();
+      files.forEach(function (file, idx) {
+        chain = chain.then(function () {
+          showImport("Reading PDF " + (idx + 1) + " of " + files.length + "…");
+          return readPdfFile(file).then(function (text) {
+            allText.push(text);
+          }).catch(function (err) {
+            errors.push(file.name + ": " + err.message);
+          });
+        });
+      });
+      return chain.then(function () { return { text: allText.join("\n"), errors: errors }; });
+    }).then(function (res) {
+      // Parse once over the combined text so a transaction appearing in two
+      // overlapping statements is de-duplicated instead of listed twice.
+      if (finishImport(parseStatementText(res.text))) {
+        if (res.errors.length) {
+          showImport(importStatus.textContent + " (" + res.errors.length + " file" +
+            (res.errors.length === 1 ? "" : "s") + " could not be read.)", "ok");
+        }
+        return;
+      }
+      if (res.errors.length) {
+        showImport("No transactions found, and " + res.errors.length + " file" +
+          (res.errors.length === 1 ? "" : "s") + " could not be read: " + res.errors.join("; "), "err");
+      } else {
+        showImport("No transactions found in those PDFs. Try statements showing one transaction per line with dates and amounts.", "err");
+      }
     }).catch(function (err) {
-      showImport("Could not read that PDF: " + err.message, "err");
+      showImport("Could not read those PDFs: " + err.message, "err");
     });
   });
 
