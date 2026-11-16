@@ -121,6 +121,8 @@
   .sync-status.ok { color: var(--green); }
   .sync-status.err { color: var(--red); }
   details summary { cursor: pointer; font-weight: 600; }
+  .section-details > summary { margin-bottom: 12px; }
+  .section-details > summary h2 { display: inline; margin-bottom: 0; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
   /* Screenshot + PDF import */
   .import-drop {
@@ -221,7 +223,8 @@
   </div>
 
   <div class="card">
-    <h2>Recurring</h2>
+    <details id="recurringDetails" class="section-details">
+      <summary><h2>Recurring</h2></summary>
     <p class="hint" style="margin-top:0;margin-bottom:10px">Fixed monthly income and expenses — rent, loans, insurance, babysitting. Each one is added to your transactions automatically every month, on the day you pick.</p>
     <div class="type-toggle">
       <button id="recBtnExpense" class="active-expense">− Expense</button>
@@ -249,6 +252,7 @@
     </div>
     <button class="btn-primary" id="addRecurring">Add recurring</button>
     <div id="recurringList" style="margin-top:12px"></div>
+    </details>
   </div>
 
   <div class="card">
@@ -285,8 +289,10 @@
   </div>
 
   <div class="card">
-    <h2 id="txListTitle">Transactions</h2>
-    <div id="txList"></div>
+    <details id="txDetails" class="section-details" open>
+      <summary><h2 id="txListTitle">Transactions</h2></summary>
+      <div id="txList"></div>
+    </details>
   </div>
 
   <div class="card">
@@ -332,6 +338,26 @@
   viewYear = now.getFullYear();
   viewMonth = now.getMonth();
   var entryType = "expense";
+
+  // Collapsible sections: Recurring starts folded, Transactions starts open.
+  // Each device remembers how you left them (stored locally, never synced).
+  var UI_KEY = "budget-ui-v1";
+  function loadUiState() {
+    try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function setupCollapsible(detailsId, key, defaultOpen) {
+    var el = $(detailsId);
+    if (!el) return;
+    var ui = loadUiState();
+    el.open = (key in ui) ? !!ui[key] : defaultOpen;
+    el.addEventListener("toggle", function () {
+      var ui2 = loadUiState();
+      ui2[key] = el.open;
+      try { localStorage.setItem(UI_KEY, JSON.stringify(ui2)); } catch (e) { /* private mode: don't remember */ }
+    });
+  }
+  setupCollapsible("recurringDetails", "recurringOpen", false);
+  setupCollapsible("txDetails", "txOpen", true);
 
   // Add any default categories missing from a saved list (e.g. Travel,
   // added after the data was first saved), in their default position:
