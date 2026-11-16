@@ -123,6 +123,9 @@
   details summary { cursor: pointer; font-weight: 600; }
   .section-details > summary { margin-bottom: 12px; }
   .section-details > summary h2 { display: inline; margin-bottom: 0; }
+  .insight { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.95rem; }
+  .insight:last-child { border-bottom: none; }
+  .insight-icon { flex: none; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
   /* Screenshot + PDF import */
   .import-drop {
@@ -181,6 +184,13 @@
         <div class="value" id="monthSaved">$0.00</div>
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <details id="insightsDetails" class="section-details" open>
+      <summary><h2 id="insightsTitle">Insights</h2></summary>
+      <div id="insightsList"></div>
+    </details>
   </div>
 
   <div class="card">
@@ -358,6 +368,7 @@
   }
   setupCollapsible("recurringDetails", "recurringOpen", false);
   setupCollapsible("txDetails", "txOpen", true);
+  setupCollapsible("insightsDetails", "insightsOpen", true);
 
   // Add any default categories missing from a saved list (e.g. Travel,
   // added after the data was first saved), in their default position:
@@ -520,6 +531,118 @@
     Object.keys(entries).forEach(function (k) { if (k <= target && (best === null || k > best)) best = k; });
     return best ? entries[best] : 0;
   }
+  // Same as budgetFor, but over a passed-in budgets object (keeps
+  // computeInsights free of global state so it can be tested alone).
+  function budgetForIn(budgets, cat, y, m) {
+    var entries = budgets && budgets[cat];
+    if (!entries) return 0;
+    var target = monthKey(y, m), best = null;
+    Object.keys(entries).forEach(function (k) { if (k <= target && (best === null || k > best)) best = k; });
+    return best ? entries[best] : 0;
+  }
+  // ---- Smart Insights: plain-language takeaways about the viewed month,
+  // computed on-device from the transactions already here. Pure function:
+  // takes the data and "today" in, returns [{icon, text}] — no DOM, no
+  // global state (except the MONTHS names), so it can be tested on its own.
+  function computeInsights(txs, budgets, categories, y, m, today) {
+    var out = [];
+    var k = monthKey(y, m);
+    var list = (txs || []).filter(function (t) { return keyOf(t.date) === k; });
+    if (!list.length) return out;
+    var income = 0, spent = 0, byCat = {}, biggest = null;
+    list.forEach(function (t) {
+      if (t.type === "income") { income += t.amount; return; }
+      spent += t.amount;
+      byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+      if (!biggest || t.amount > biggest.amount) biggest = t;
+    });
+    var daysInMonth = new Date(y, m + 1, 0).getDate();
+    var isCurrent = today.getFullYear() === y && today.getMonth() === m;
+    var isPast = today.getFullYear() > y || (today.getFullYear() === y && today.getMonth() > m);
+    var daysElapsed = isCurrent ? today.getDate() : isPast ? daysInMonth : 0;
+    var monthName = MONTHS[m];
+
+    // Spending vs last month (only when the change is big enough to matter).
+    var prev = new Date(y, m - 1, 1);
+    var pk = monthKey(prev.getFullYear(), prev.getMonth());
+    var prevSpent = 0;
+    (txs || []).forEach(function (t) { if (t.type !== "income" && keyOf(t.date) === pk) prevSpent += t.amount; });
+    if (prevSpent > 0 && spent > 0) {
+      var diff = spent - prevSpent, pct = Math.round(Math.abs(diff) / prevSpent * 100);
+      if (pct >= 5) {
+        out.push({ icon: diff > 0 ? "📈" : "📉", text: "Spending is " + (diff > 0 ? "up " : "down ") + pct + "% vs " + MONTHS[prev.getMonth()] + " (" + money(spent) + " vs " + money(prevSpent) + ")." });
+      }
+    }
+
+    // Budget pace (current month, once a few days have passed — day-1
+    // projections are meaningless) or final result (past month).
+    (categories || []).forEach(function (c) {
+      var bud = budgetForIn(budgets, c, y, m);
+      var s = byCat[c] || 0;
+      if (bud <= 0 || s <= 0) return;
+      if (isCurrent && daysElapsed >= 3) {
+        var projected = s / daysElapsed * daysInMonth;
+        if (projected > bud) {
+          out.push({ icon: "⚠️", text: c + " is on pace for " + money(projected) + " this month — " + money(projected - bud) + " over your " + money(bud) + " budget." });
+        }
+      } else if (isPast && s > bud) {
+        out.push({ icon: "⚠️", text: c + " came in " + money(s - bud) + " over budget in " + monthName + " (" + money(s) + " vs " + money(bud) + ")." });
+      }
+    });
+
+    // Biggest category.
+    var topCat = null, topAmt = 0;
+    Object.keys(byCat).forEach(function (c) { if (byCat[c] > topAmt) { topAmt = byCat[c]; topCat = c; } });
+    if (topCat && spent > 0) {
+      var share = Math.round(topAmt / spent * 100);
+      out.push({ icon: "🏆", text: topCat + (isPast ? " was" : " is") + " your biggest category at " + money(topAmt) + " (" + share + "% of spending)" + (isPast ? " in " + monthName : "") + "." });
+    }
+
+    // Biggest single expense.
+    if (biggest) {
+      var note = "";
+      if (biggest.note) {
+        var n = biggest.note.length > 40 ? biggest.note.slice(0, 40) + "…" : biggest.note;
+        note = " — " + n;
+      }
+      out.push({ icon: "💸", text: "Biggest single expense: " + money(biggest.amount) + note + "." });
+    }
+
+    // Daily average.
+    if (spent > 0 && daysElapsed > 0) {
+      out.push({ icon: "📅", text: isCurrent
+        ? "You're spending about " + money(spent / daysElapsed) + " a day this month."
+        : "You spent about " + money(spent / daysElapsed) + " a day in " + monthName + "." });
+    }
+
+    // Savings rate (current and past months only).
+    if (income > 0 && (isCurrent || isPast)) {
+      var rate = Math.round((income - spent) / income * 100);
+      if (rate > 0) {
+        out.push({ icon: "💰", text: isCurrent
+          ? "You're saving " + rate + "% of your income this month."
+          : "You saved " + rate + "% of your income in " + monthName + "." });
+      } else if (rate < 0) {
+        out.push({ icon: "🔴", text: isCurrent
+          ? "You're spending " + Math.abs(rate) + "% more than your income this month."
+          : "You spent " + Math.abs(rate) + "% more than your income in " + monthName + "." });
+      }
+    }
+    return out;
+  }
+  function renderInsights() {
+    var el = $("insightsList");
+    if (!el) return;
+    $("insightsTitle").textContent = "Insights · " + MONTHS[viewMonth] + " " + viewYear;
+    var items = computeInsights(state.txs, state.budgets, state.categories, viewYear, viewMonth, new Date());
+    if (!items.length) {
+      el.innerHTML = '<p class="empty">No insights yet — add transactions to see them.</p>';
+      return;
+    }
+    el.innerHTML = items.map(function (it) {
+      return '<div class="insight"><span class="insight-icon">' + it.icon + '</span><span>' + esc(it.text) + '</span></div>';
+    }).join("");
+  }
 
   function renderCategories() {
     categoryEl.innerHTML = "";
@@ -616,6 +739,7 @@
       });
     }
     renderRecurring();
+    renderInsights();
   }
 
   function setType(t) {
