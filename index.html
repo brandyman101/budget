@@ -356,7 +356,11 @@
     try { return JSON.parse(localStorage.getItem(UI_KEY)) || {}; } catch (e) { return {}; }
   }
   function setupCollapsible(detailsId, key, defaultOpen) {
-    var el = $(detailsId);
+    // NOTE: document.getElementById directly — NOT the $ shortcut. These
+    // calls run at startup, before $ is defined (line ~502); using $ here
+    // threw "TypeError: $ is not a function" and killed the whole script
+    // (broke the app on the 2026-11-16 collapsible deploy). Do not change.
+    var el = document.getElementById(detailsId);
     if (!el) return;
     var ui = loadUiState();
     el.open = (key in ui) ? !!ui[key] : defaultOpen;
