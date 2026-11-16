@@ -285,6 +285,10 @@
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   var state = load();
+  // One-time cleanup for transactions imported before the type-word strip:
+  // drop a trailing "Pay Over Time" / "Pay In Full" from saved notes.
+  // Runs on every load but only saves when something actually changed.
+  if (cleanTypeWords(state.txs)) { markDirty(); save(); }
   var viewYear, viewMonth; // the month being viewed
   var now = new Date();
   viewYear = now.getFullYear();
@@ -343,6 +347,19 @@
     return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {} };
   }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+  // Removes a trailing "Pay Over Time" / "Pay In Full" from transaction
+  // notes (the Amex plan type that used to be swept into descriptions).
+  // Returns true if any note changed. Idempotent: a clean note is a no-op.
+  function cleanTypeWords(txs) {
+    var changed = false;
+    (txs || []).forEach(function (t) {
+      if (typeof t.note === "string") {
+        var cleaned = t.note.replace(/(^|\s+)(pay over time|pay in full)$/i, "").trim();
+        if (cleaned !== t.note) { t.note = cleaned; changed = true; }
+      }
+    });
+    return changed;
+  }
   function money(n) {
     return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
@@ -603,9 +620,12 @@
         });
       }
     }
+    // Clean any type words off notes that arrived from another device or
+    // an older version; if anything changed, the next sync pushes it back.
+    var cleaned = cleanTypeWords(state.txs);
     state.sync.lastSync = new Date().toLocaleString();
     state.sync.lastSyncAt = Date.now();
-    state.sync.dirty = false;
+    state.sync.dirty = cleaned;
     save(); renderCategories(); render();
   }
 
@@ -707,7 +727,7 @@
       // Strip a trailing plan/type word (Amex puts "Pay Over Time" or
       // "Pay In Full" as the last column, so it lands at the end of the
       // description). Trailing only, so merchant names are never touched.
-      desc = desc.replace(/\s+(pay over time|pay in full)$/i, "").trim();
+      desc = desc.replace(/(^|\s+)(pay over time|pay in full)$/i, "").trim();
       if (!desc || desc.length < 2) return;
       if (/^(total|balance|payment)\b/i.test(desc)) return;
       rows.push({
