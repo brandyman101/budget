@@ -146,6 +146,8 @@
   .preview-dup { font-size: 0.75rem; color: var(--amber); font-weight: 700; }
   .preview-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
   @media (max-width: 480px) {
+    .balance-row { flex-wrap: wrap; }
+    .balance-box { flex: 1 1 40%; }
     .balance-box .value { font-size: 1.1rem; }
     .form-row { flex-direction: column; }
   }
@@ -171,6 +173,10 @@
       <div class="balance-box">
         <div class="label" id="monthSpentLabel">Spent · Nov</div>
         <div class="value neg" id="monthSpent">$0.00</div>
+      </div>
+      <div class="balance-box">
+        <div class="label" id="monthSavedLabel">Saved · Nov</div>
+        <div class="value" id="monthSaved">$0.00</div>
       </div>
     </div>
   </div>
@@ -457,8 +463,8 @@
 
   // ---- elements ----
   var $ = function (id) { return document.getElementById(id); };
-  var balanceValue = $("balanceValue"), monthIncome = $("monthIncome"), monthSpent = $("monthSpent"),
-      monthIncomeLabel = $("monthIncomeLabel"), monthSpentLabel = $("monthSpentLabel"),
+  var balanceValue = $("balanceValue"), monthIncome = $("monthIncome"), monthSpent = $("monthSpent"), monthSaved = $("monthSaved"),
+      monthIncomeLabel = $("monthIncomeLabel"), monthSpentLabel = $("monthSpentLabel"), monthSavedLabel = $("monthSavedLabel"),
       monthLabel = $("monthLabel"), txList = $("txList"), txListTitle = $("txListTitle"),
       budgetList = $("budgetList"), chartEl = $("chart"),
       amountEl = $("amount"), categoryEl = $("category"), txDateEl = $("txDate"), noteEl = $("note"),
@@ -513,8 +519,12 @@
     var t = monthTotals(viewYear, viewMonth);
     monthIncome.textContent = money(t.income);
     monthSpent.textContent = money(t.spent);
+    var saved = t.income - t.spent;
+    monthSaved.textContent = money(saved);
+    monthSaved.className = "value" + (saved < 0 ? " neg" : saved > 0 ? " pos" : "");
     monthIncomeLabel.textContent = "Income · " + MONTHS[viewMonth];
     monthSpentLabel.textContent = "Spent · " + MONTHS[viewMonth];
+    monthSavedLabel.textContent = "Saved · " + MONTHS[viewMonth];
     monthLabel.textContent = MONTHS[viewMonth] + " " + viewYear;
     txListTitle.textContent = "Transactions · " + MONTHS[viewMonth] + " " + viewYear;
 
