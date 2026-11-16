@@ -887,7 +887,9 @@
         }
       });
     }).then(function (result) {
-      if (!finishImport(parseStatementText(keepPurchaseSection(result.data.text || "")))) {
+      var rows = parseStatementText(keepPurchaseSection(result.data.text || ""));
+      if (!rows.length) rows = parseStatementText(result.data.text || ""); // filter left nothing: use the whole text
+      if (!finishImport(rows)) {
         showImport("No transactions found in that image. Try a clearer screenshot showing one transaction per line with dates and amounts.", "err");
       }
     }).catch(function (err) {
@@ -920,12 +922,18 @@
       // don't count as a usable text layer.
       var filtered = keepPurchaseSection(res.text);
       if (parseStatementText(filtered).length) return filtered;
+      // The section filter left nothing — fall back to the whole text rather
+      // than losing the import (e.g. a heading the filter misreads, or a
+      // layout where the heading comes after the charges in the file).
+      if (parseStatementText(res.text).length) return res.text;
       // No usable text layer — likely a scanned PDF. Fall back to OCR.
       showImport("No text found in " + file.name + " — it looks scanned. Reading pages as images… (first use downloads the text reader, ~10MB)");
       return loadTesseract().then(function () {
         return ocrPdfPages(res.pdf);
       }).then(function (ocrText) {
-        return keepPurchaseSection(ocrText);
+        var ocrFiltered = keepPurchaseSection(ocrText);
+        if (parseStatementText(ocrFiltered).length) return ocrFiltered;
+        return ocrText;
       });
     });
   }
