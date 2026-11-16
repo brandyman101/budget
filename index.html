@@ -662,6 +662,21 @@
     return null;
   }
 
+  // Section filter: statements often list summary, payments and fees before
+  // the real charges. If the text has a "Purchases" or "New Charge Details"
+  // section heading, only the lines from that heading on are kept. A text
+  // without either heading is returned unchanged.
+  function keepPurchaseSection(text) {
+    var lines = text.split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].replace(/\s+/g, " ").trim().toLowerCase();
+      if (/^(purchases|new charge details)(\s|$|[-:])/.test(line)) {
+        return lines.slice(i).join("\n");
+      }
+    }
+    return text;
+  }
+
   function parseStatementText(text) {
     var rows = [];
     var lines = text.split(/\r?\n/);
@@ -872,7 +887,7 @@
         }
       });
     }).then(function (result) {
-      if (!finishImport(parseStatementText(result.data.text || ""))) {
+      if (!finishImport(parseStatementText(keepPurchaseSection(result.data.text || "")))) {
         showImport("No transactions found in that image. Try a clearer screenshot showing one transaction per line with dates and amounts.", "err");
       }
     }).catch(function (err) {
@@ -901,11 +916,16 @@
       }
       return chain.then(function () { return { pdf: pdf, text: texts.join("\n") }; });
     }).then(function (res) {
-      if (parseStatementText(res.text).length) return res.text;
+      // Filter before deciding: transactions above the Purchases heading
+      // don't count as a usable text layer.
+      var filtered = keepPurchaseSection(res.text);
+      if (parseStatementText(filtered).length) return filtered;
       // No usable text layer — likely a scanned PDF. Fall back to OCR.
       showImport("No text found in " + file.name + " — it looks scanned. Reading pages as images… (first use downloads the text reader, ~10MB)");
       return loadTesseract().then(function () {
         return ocrPdfPages(res.pdf);
+      }).then(function (ocrText) {
+        return keepPurchaseSection(ocrText);
       });
     });
   }
