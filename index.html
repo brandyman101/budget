@@ -663,14 +663,17 @@
   }
 
   // Section filter: statements often list summary, payments and fees before
-  // the real charges. If the text has a "Purchases" or "New Charge Details"
+  // the real charges. If the text has a "Purchases" or "New Charges Details"
   // section heading, only the lines from that heading on are kept. A text
-  // without either heading is returned unchanged.
+  // without either heading is returned unchanged. (Amex spells it "New
+  // Charges Details" — plural on both words. Bare "New Charges" must NOT
+  // match: Amex summary lines start with it, e.g. "New Charges ABRAHAM
+  // BRANDEL 6-02004 $0.00 $1,154.69".)
   function keepPurchaseSection(text) {
     var lines = text.split(/\r?\n/);
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].replace(/\s+/g, " ").trim().toLowerCase();
-      if (/^(purchases|new charge details)(\s|$|[-:])/.test(line)) {
+      if (/^(purchases|new charges? details?)(\s|$|[-:])/.test(line)) {
         return lines.slice(i).join("\n");
       }
     }
