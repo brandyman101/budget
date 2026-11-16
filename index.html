@@ -704,6 +704,10 @@
         .replace(/\$?\s?[\d,]+\.\d{2}\s*(-|CR)?\s*$/i, "")
         .replace(/[•·|]+/g, " ").replace(/\s+/g, " ").trim()
         .replace(/^[-–—\s]+|[-–—\s]+$/g, "");
+      // Strip a trailing plan/type word (Amex puts "Pay Over Time" or
+      // "Pay In Full" as the last column, so it lands at the end of the
+      // description). Trailing only, so merchant names are never touched.
+      desc = desc.replace(/\s+(pay over time|pay in full)$/i, "").trim();
       if (!desc || desc.length < 2) return;
       if (/^(total|balance|payment)\b/i.test(desc)) return;
       rows.push({
