@@ -361,6 +361,32 @@
     return state.sync.dirty ? Date.now() : (state.sync.lastSyncAt || 0);
   }
 
+  // Deleted ids ("tombstones"). Sync merges transactions by id, so without
+  // these a transaction deleted on one device comes back from the other
+  // device on the next sync. Tombstones are kept (the list stays tiny)
+  // and travel with the sync payload so every device honors them.
+  function normalizeDeleted(del) {
+    var out = { txs: [], recurring: [] };
+    if (del) {
+      ["txs", "recurring"].forEach(function (kind) {
+        (del[kind] || []).forEach(function (id) {
+          var s = String(id);
+          if (out[kind].indexOf(s) === -1) out[kind].push(s);
+        });
+      });
+    }
+    return out;
+  }
+  function tombstone(kind, id) {
+    state.deleted = normalizeDeleted(state.deleted);
+    var s = String(id);
+    if (state.deleted[kind].indexOf(s) === -1) state.deleted[kind].push(s);
+  }
+  function withoutDead(list, kind) {
+    var dead = (state.deleted && state.deleted[kind]) || [];
+    return (list || []).filter(function (x) { return dead.indexOf(String(x.id)) === -1; });
+  }
+
   function load() {
     try {
       var raw = localStorage.getItem(STORE_KEY);
@@ -371,13 +397,14 @@
         d.budgets = d.budgets || {};
         d.sync = d.sync || {};
         d.recurring = d.recurring || [];
+        d.deleted = normalizeDeleted(d.deleted);
         // State saved before the dirty flag existed: treat existing local
         // data as unsynced (push it), an empty device as clean (pull).
         if (d.sync.dirty === undefined) d.sync.dirty = hasLocalData(d);
         return d;
       }
     } catch (e) { /* corrupted storage: start fresh */ }
-    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [] };
+    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [], deleted: { txs: [], recurring: [] } };
   }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   // Removes a trailing "Pay Over Time" / "Pay In Full" from transaction
@@ -548,6 +575,7 @@
       }).join("");
       txList.querySelectorAll(".tx-del").forEach(function (btn) {
         btn.addEventListener("click", function () {
+          tombstone("txs", btn.getAttribute("data-id"));
           state.txs = state.txs.filter(function (t) { return String(t.id) !== btn.getAttribute("data-id"); });
           markDirty();
           save(); render();
@@ -619,6 +647,7 @@
     }).join("");
     el.querySelectorAll(".tx-del").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        tombstone("recurring", btn.getAttribute("data-id"));
         state.recurring = (state.recurring || []).filter(function (r) { return String(r.id) !== btn.getAttribute("data-id"); });
         markDirty();
         save(); renderRecurring();
@@ -685,7 +714,8 @@
       try {
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
-        state = { txs: d.txs, categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: d.recurring || [] };
+        var del = normalizeDeleted(d.deleted);
+        state = { txs: d.txs.filter(function (t) { return del.txs.indexOf(String(t.id)) === -1; }), categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: (d.recurring || []).filter(function (r) { return del.recurring.indexOf(String(r.id)) === -1; }), deleted: del };
         state.sync.dirty = true;
         save(); renderCategories(); render();
         alert("Imported " + state.txs.length + " transactions.");
@@ -715,7 +745,7 @@
     fetch(url + "/sync", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + secret },
-      body: JSON.stringify({ data: { txs: state.txs, categories: state.categories, budgets: state.budgets }, clientUpdatedAt: syncTimestamp() })
+      body: JSON.stringify({ data: { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, deleted: normalizeDeleted(state.deleted) }, clientUpdatedAt: syncTimestamp() })
     }).then(function (res) {
       if (res.status === 401 || res.status === 403) throw new Error("Worker rejected the secret (unauthorized).");
       if (!res.ok) throw new Error("Worker returned HTTP " + res.status + ".");
@@ -732,23 +762,28 @@
   // saw; otherwise merge by id so unsynced local additions survive.
   function applyRemoteData(remote) {
     if (remote && remote.data && Array.isArray(remote.data.txs)) {
+      // Merge tombstones first: a delete made on any device wins everywhere.
+      state.deleted = normalizeDeleted({
+        txs: ((state.deleted && state.deleted.txs) || []).concat((remote.data.deleted && remote.data.deleted.txs) || []),
+        recurring: ((state.deleted && state.deleted.recurring) || []).concat((remote.data.deleted && remote.data.deleted.recurring) || [])
+      });
       var mine = state.txs.length, theirs = remote.data.txs.length;
       if ((remote.updatedAt || 0) > (state.sync.lastSyncAt || 0) && theirs >= mine) {
-        state.txs = remote.data.txs;
+        state.txs = withoutDead(remote.data.txs, "txs");
         state.categories = remote.data.categories || state.categories;
         state.budgets = remote.data.budgets || state.budgets;
-        state.recurring = remote.data.recurring || state.recurring || [];
+        state.recurring = withoutDead(remote.data.recurring || state.recurring, "recurring");
       } else {
         var byId = {};
         state.txs.concat(remote.data.txs).forEach(function (t) { byId[t.id] = t; });
-        state.txs = Object.keys(byId).map(function (k) { return byId[k]; });
+        state.txs = withoutDead(Object.keys(byId).map(function (k) { return byId[k]; }), "txs");
         (remote.data.categories || []).forEach(function (c) { if (state.categories.indexOf(c) === -1) state.categories.push(c); });
         Object.keys(remote.data.budgets || {}).forEach(function (cat) {
           state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
         });
         var recById = {};
         (state.recurring || []).concat(remote.data.recurring || []).forEach(function (r) { recById[r.id] = r; });
-        state.recurring = Object.keys(recById).map(function (k) { return recById[k]; });
+        state.recurring = withoutDead(Object.keys(recById).map(function (k) { return recById[k]; }), "recurring");
       }
     }
     // Clean any type words off notes that arrived from another device or
