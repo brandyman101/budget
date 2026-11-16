@@ -215,6 +215,37 @@
   </div>
 
   <div class="card">
+    <h2>Recurring</h2>
+    <p class="hint" style="margin-top:0;margin-bottom:10px">Fixed monthly income and expenses — rent, loans, insurance, babysitting. Each one is added to your transactions automatically every month, on the day you pick.</p>
+    <div class="type-toggle">
+      <button id="recBtnExpense" class="active-expense">− Expense</button>
+      <button id="recBtnIncome">+ Income</button>
+    </div>
+    <div class="form-row">
+      <div>
+        <label for="recAmount">Amount ($)</label>
+        <input type="number" id="recAmount" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div>
+        <label for="recCategory">Category</label>
+        <select id="recCategory"></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label for="recDay">Day of month</label>
+        <input type="number" id="recDay" inputmode="numeric" min="1" max="31" step="1" placeholder="1">
+      </div>
+      <div>
+        <label for="recNote">Description</label>
+        <input type="text" id="recNote" placeholder="e.g. Rent">
+      </div>
+    </div>
+    <button class="btn-primary" id="addRecurring">Add recurring</button>
+    <div id="recurringList" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
     <h2>Import from screenshot or PDF</h2>
     <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement, or upload statement PDFs — you can pick several at once. The text is read on this device — your files are never uploaded anywhere.</p>
     <label class="import-drop" for="importImage">📷 Tap to choose a screenshot
@@ -289,6 +320,7 @@
   // drop a trailing "Pay Over Time" / "Pay In Full" from saved notes.
   // Runs on every load but only saves when something actually changed.
   if (cleanTypeWords(state.txs)) { markDirty(); save(); }
+  generateRecurring(); // adds this month's transactions for recurring items
   var viewYear, viewMonth; // the month being viewed
   var now = new Date();
   viewYear = now.getFullYear();
@@ -338,13 +370,14 @@
         d.categories = ensureDefaultCats(d.categories || DEFAULT_CATS.slice());
         d.budgets = d.budgets || {};
         d.sync = d.sync || {};
+        d.recurring = d.recurring || [];
         // State saved before the dirty flag existed: treat existing local
         // data as unsynced (push it), an empty device as clean (pull).
         if (d.sync.dirty === undefined) d.sync.dirty = hasLocalData(d);
         return d;
       }
     } catch (e) { /* corrupted storage: start fresh */ }
-    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {} };
+    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [] };
   }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   // Removes a trailing "Pay Over Time" / "Pay In Full" from transaction
@@ -360,6 +393,37 @@
     });
     return changed;
   }
+  // Recurring: each item adds one transaction a month, on its day.
+  // Runs on load and whenever an item is added. Deterministic ids
+  // ("rec-<item id>-<YYYY-MM>") keep two devices from doubling up, and
+  // lastMonth stops a deleted month's transaction from coming back.
+  // Current month only — months are never backfilled.
+  function generateRecurring() {
+    var now = new Date();
+    var mk = monthKey(now.getFullYear(), now.getMonth());
+    var daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    var changed = false;
+    (state.recurring || []).forEach(function (item) {
+      if (item.lastMonth === mk) return;
+      var day = Math.min(Math.max(item.day || 1, 1), daysInMonth);
+      var id = "rec-" + item.id + "-" + mk;
+      if (!state.txs.some(function (t) { return String(t.id) === id; })) {
+        state.txs.push({
+          id: id,
+          type: item.type,
+          amount: item.amount,
+          category: item.type === "income" ? "Income" : item.category,
+          date: mk + "-" + String(day).padStart(2, "0"),
+          note: item.note || "",
+          recurringId: item.id
+        });
+      }
+      item.lastMonth = mk;
+      changed = true;
+    });
+    if (changed) { markDirty(); save(); }
+  }
+
   function money(n) {
     return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
@@ -410,6 +474,11 @@
     bc.innerHTML = "";
     state.categories.forEach(function (c) {
       var o = document.createElement("option"); o.value = c; o.textContent = c; bc.appendChild(o);
+    });
+    var rc = $("recCategory");
+    rc.innerHTML = "";
+    state.categories.forEach(function (c) {
+      var o = document.createElement("option"); o.value = c; o.textContent = c; rc.appendChild(o);
     });
   }
 
@@ -473,7 +542,7 @@
       txList.innerHTML = list.map(function (t) {
         var sign = t.type === "income" ? "+" : "−";
         return '<div class="tx"><div class="tx-main"><span class="tx-cat">' + esc(t.category) + '</span>' +
-          '<span class="tx-note">' + esc(t.date) + (t.note ? " · " + esc(t.note) : "") + '</span></div>' +
+          '<span class="tx-note">' + esc(t.date) + (t.note ? " · " + esc(t.note) : "") + (t.recurringId ? " 🔁" : "") + '</span></div>' +
           '<div class="tx-right"><span class="tx-amt ' + (t.type === "income" ? "inc" : "exp") + '">' + sign + money(Math.abs(t.amount)) + '</span>' +
           '<button class="tx-del" data-id="' + t.id + '" aria-label="Delete">×</button></div></div>';
       }).join("");
@@ -485,6 +554,7 @@
         });
       });
     }
+    renderRecurring();
   }
 
   function setType(t) {
@@ -523,6 +593,63 @@
     categoryEl.value = name;
   });
 
+  // ---- recurring ----
+  var recEntryType = "expense";
+  function setRecType(t) {
+    recEntryType = t;
+    $("recBtnExpense").className = t === "expense" ? "active-expense" : "";
+    $("recBtnIncome").className = t === "income" ? "active-income" : "";
+  }
+  $("recBtnExpense").addEventListener("click", function () { setRecType("expense"); });
+  $("recBtnIncome").addEventListener("click", function () { setRecType("income"); });
+
+  function renderRecurring() {
+    var el = $("recurringList");
+    var items = state.recurring || [];
+    if (!items.length) {
+      el.innerHTML = '<p class="empty">No recurring items yet.</p>';
+      return;
+    }
+    el.innerHTML = items.map(function (item) {
+      var sign = item.type === "income" ? "+" : "−";
+      return '<div class="tx"><div class="tx-main"><span class="tx-cat">' + esc(item.type === "income" ? "Income" : item.category) + '</span>' +
+        '<span class="tx-note">' + esc(item.note || "") + ' · day ' + item.day + ' · monthly</span></div>' +
+        '<div class="tx-right"><span class="tx-amt ' + (item.type === "income" ? "inc" : "exp") + '">' + sign + money(item.amount) + '</span>' +
+        '<button class="tx-del" data-id="' + item.id + '" aria-label="Delete">×</button></div></div>';
+    }).join("");
+    el.querySelectorAll(".tx-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        state.recurring = (state.recurring || []).filter(function (r) { return String(r.id) !== btn.getAttribute("data-id"); });
+        markDirty();
+        save(); renderRecurring();
+      });
+    });
+  }
+
+  $("addRecurring").addEventListener("click", function () {
+    var amt = parseFloat($("recAmount").value);
+    if (!amt || amt <= 0) { $("recAmount").focus(); return; }
+    var day = parseInt($("recDay").value, 10);
+    if (!day || day < 1 || day > 31) { $("recDay").focus(); return; }
+    var note = $("recNote").value.trim();
+    if (!note) { $("recNote").focus(); return; }
+    state.recurring = state.recurring || [];
+    state.recurring.push({
+      id: Date.now(),
+      type: recEntryType,
+      amount: Math.round(amt * 100) / 100,
+      category: recEntryType === "income" ? "Income" : $("recCategory").value,
+      note: note,
+      day: day,
+      lastMonth: null
+    });
+    $("recAmount").value = ""; $("recDay").value = ""; $("recNote").value = "";
+    markDirty();
+    save();
+    generateRecurring(); // adds this month's transaction right away
+    renderRecurring(); render();
+  });
+
   $("setBudget").addEventListener("click", function () {
     var amt = parseFloat($("budgetAmount").value);
     if (!amt || amt <= 0) { $("budgetAmount").focus(); return; }
@@ -558,7 +685,7 @@
       try {
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
-        state = { txs: d.txs, categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync };
+        state = { txs: d.txs, categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: d.recurring || [] };
         state.sync.dirty = true;
         save(); renderCategories(); render();
         alert("Imported " + state.txs.length + " transactions.");
@@ -610,6 +737,7 @@
         state.txs = remote.data.txs;
         state.categories = remote.data.categories || state.categories;
         state.budgets = remote.data.budgets || state.budgets;
+        state.recurring = remote.data.recurring || state.recurring || [];
       } else {
         var byId = {};
         state.txs.concat(remote.data.txs).forEach(function (t) { byId[t.id] = t; });
@@ -618,6 +746,9 @@
         Object.keys(remote.data.budgets || {}).forEach(function (cat) {
           state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
         });
+        var recById = {};
+        (state.recurring || []).concat(remote.data.recurring || []).forEach(function (r) { recById[r.id] = r; });
+        state.recurring = Object.keys(recById).map(function (k) { return recById[k]; });
       }
     }
     // Clean any type words off notes that arrived from another device or
