@@ -90,7 +90,7 @@
   .budget-head .nums { font-size: 0.85rem; color: var(--muted); }
   .budget-head .nums.over { color: var(--red); font-weight: 700; }
   .bar-track { height: 12px; background: #efe7d8; border-radius: 6px; overflow: hidden; }
-  .bar-fill { height: 100%; border-radius: 6px; background: var(--green); transition: width 0.3s; }
+  .bar-fill { height: 100%; border-radius: 6px; background: var(--green); transition: width 0.5s ease-out; }
   .bar-fill.warn { background: var(--amber); }
   .bar-fill.over { background: var(--red); }
   .budget-edit { display: flex; gap: 8px; margin-top: 10px; }
@@ -112,7 +112,10 @@
   .chart { display: flex; align-items: flex-end; gap: 8px; height: 160px; padding-top: 8px; }
   .chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
   .chart-val { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; }
-  .chart-bar { width: 100%; max-width: 44px; background: var(--terra); border-radius: 6px 6px 0 0; min-height: 4px; }
+  .chart-bar { width: 100%; max-width: 44px; background: var(--terra); border-radius: 6px 6px 0 0; min-height: 4px; transition: height 0.5s ease-out; }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-bar, .bar-fill { transition: none !important; }
+  }
   .chart-bar.current { background: var(--ink); }
   .chart-lab { font-size: 0.7rem; color: var(--muted); margin-top: 6px; }
   /* Settings */
@@ -785,16 +788,18 @@
     if (!cats.length) {
       budgetList.innerHTML = '<p class="empty">No budgets set yet. Pick a category and set a monthly amount below.</p>';
     } else {
-      budgetList.innerHTML = cats.map(function (c) {
+      budgetList.innerHTML = cats.map(function (c, i) {
         var bud = budgetFor(c, viewYear, viewMonth), spent = spentByCat[c] || 0;
         var pct = bud > 0 ? Math.min(100, Math.round(spent / bud * 100)) : 0;
         var cls = bud > 0 && spent > bud ? "over" : pct >= 80 ? "warn" : "";
         var right = bud > 0
           ? money(spent) + " of " + money(bud) + (spent > bud ? " · over by " + money(spent - bud) : "")
           : money(spent) + " spent · no budget set";
+        // Bars render at 0 width and grow to data-w on the next frame
+        // (see animateBars) — the CSS transition does the tweening.
         return '<div class="budget-item"><div class="budget-head"><span class="cat">' + esc(c) + '</span>' +
           '<span class="nums' + (spent > bud && bud > 0 ? " over" : "") + '">' + esc(right) + '</span></div>' +
-          '<div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + pct + '%"></div></div></div>';
+          '<div class="bar-track"><div class="bar-fill ' + cls + '" data-w="' + pct + '" style="width:0%;transition-delay:' + Math.min(i * 40, 400) + 'ms"></div></div></div>';
       }).join("");
     }
 
@@ -807,10 +812,15 @@
       if (tot > max) max = tot;
       cols.push({ label: MONTHS[d.getMonth()], spent: tot, current: i === 0 });
     }
-    chartEl.innerHTML = cols.map(function (c) {
-      var h = max > 0 ? Math.max(4, Math.round(c.spent / max * 120)) : 4;
+    chartEl.innerHTML = cols.map(function (c, i) {
+      // Scale: tallest bar 100px. (120px overflowed the 160px column once
+      // the value + month labels are counted, and flex shrank it to ~110px,
+      // skewing the tallest bar's ratio. 100px fits with room to spare.)
+      var h = max > 0 ? Math.max(4, Math.round(c.spent / max * 100)) : 4;
+      // Bars render at minimum height and grow to data-h on the next frame
+      // (see animateBars) — the CSS transition does the tweening.
       return '<div class="chart-col"><div class="chart-val">' + (c.spent > 0 ? "$" + Math.round(c.spent).toLocaleString() : "") + '</div>' +
-        '<div class="chart-bar' + (c.current ? " current" : "") + '" style="height:' + h + 'px"></div>' +
+        '<div class="chart-bar' + (c.current ? " current" : "") + '" data-h="' + h + '" style="height:4px;transition-delay:' + (i * 50) + 'ms"></div>' +
         '<div class="chart-lab">' + c.label + '</div></div>';
     }).join("");
 
@@ -818,6 +828,25 @@
     renderTxList(txsInMonth(viewYear, viewMonth).slice().sort(txByDateDesc), false);
     renderRecurring();
     renderInsights();
+    animateBars();
+  }
+
+  // Grow the chart and budget bars to their target sizes. They render at
+  // their minimum size; the double requestAnimationFrame waits until the
+  // browser has painted that starting state, then the CSS transitions
+  // tween them to data-h / data-w. (prefers-reduced-motion disables the
+  // transitions in CSS, so those users jump straight to final sizes.)
+  function animateBars() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        document.querySelectorAll(".chart-bar[data-h]").forEach(function (bar) {
+          bar.style.height = bar.getAttribute("data-h") + "px";
+        });
+        document.querySelectorAll(".bar-fill[data-w]").forEach(function (bar) {
+          bar.style.width = bar.getAttribute("data-w") + "%";
+        });
+      });
+    });
   }
 
   function txByDateDesc(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; }
