@@ -1264,7 +1264,11 @@
     // Utilities row above must win for phone bills. (Transport was
     // retired 2026-11-16: plain Uber, Lyft and transit now fall through
     // to Other; "uber eats" still matches Dining above.)
-    ["Gas", ["shell", "exxon", "mobil", "chevron", "sunoco"]]
+    // Major US gas brands (Avi, 2026-11-16). Deliberately NOT here: ARCO
+    // ("arco" is inside "Marco's" — and ARCO has no NY stations), 7-Eleven
+    // and Costco (convenience/warehouse first, gas second), Pilot ("pilot"
+    // is too generic a word).
+    ["Gas", ["shell", "exxon", "mobil", "chevron", "sunoco", "bp", "speedway", "citgo", "valero", "marathon", "conoco", "gulf", "sinclair", "wawa", "sheetz", "quiktrip", "racetrac", "loves", "love's", "flying j", "circle k", "phillips 66", "hess", "getty"]]
   ];
   var SKIP_LINE = /^(date|description|amount|transactions?|activity|statement|balance|total|payment due|minimum payment|previous balance|new balance|payments? and credits?|thank you|autopay|auto pay|ending balance|beginning balance)\b/i;
 
