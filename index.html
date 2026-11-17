@@ -106,7 +106,7 @@
   .tx-amt { font-weight: 700; }
   .tx-amt.exp { color: var(--red); }
   .tx-amt.inc { color: var(--green); }
-  .tx-del { background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; padding: 4px; }
+  .tx-del, .tx-move { background: none; border: none; color: var(--muted); font-size: 1.1rem; cursor: pointer; padding: 4px; }
   .empty { color: var(--muted); text-align: center; padding: 16px 0; font-size: 0.95rem; }
   /* Chart */
   .chart { display: flex; align-items: flex-end; gap: 8px; height: 160px; padding-top: 8px; }
@@ -126,6 +126,10 @@
   .insight { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.95rem; }
   .insight:last-child { border-bottom: none; }
   .insight-icon { flex: none; }
+  .view-toggle { margin-bottom: 12px; }
+  .view-toggle button.active-view { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .pool-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .pool-row:last-child { border-bottom: none; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
   /* Screenshot + PDF import */
   .import-drop {
@@ -165,10 +169,15 @@
 </header>
 <main>
 
+  <div class="type-toggle view-toggle">
+    <button id="viewMonthly" class="active-view">Monthly</button>
+    <button id="viewVacation">✈️ Vacation</button>
+  </div>
+
   <div class="card">
     <div class="balance-row">
       <div class="balance-box">
-        <div class="label">Balance</div>
+        <div class="label" id="balanceLabel">Balance</div>
         <div class="value" id="balanceValue">$0.00</div>
       </div>
       <div class="balance-box">
@@ -186,7 +195,28 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="tripCard" style="display:none">
+    <h2>✈️ Trip fund</h2>
+    <div class="form-row">
+      <div>
+        <label for="tripName">Trip name</label>
+        <input type="text" id="tripName" placeholder="e.g. Aruba">
+      </div>
+      <div>
+        <label for="tripBudget">Trip budget ($)</label>
+        <input type="number" id="tripBudget" inputmode="decimal" min="0" step="1" placeholder="0">
+      </div>
+    </div>
+    <button class="btn-secondary" id="saveTrip">Save trip</button>
+    <div class="budget-edit">
+      <input type="number" id="poolAmount" inputmode="decimal" min="0" step="0.01" placeholder="Add to the money pool ($)">
+      <button class="btn-secondary" id="addPool">Add to pool</button>
+    </div>
+    <p class="hint" id="poolHint"></p>
+    <div id="poolList" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card" id="insightsCard">
     <details id="insightsDetails" class="section-details" open>
       <summary><h2 id="insightsTitle">Insights</h2></summary>
       <div id="insightsList"></div>
@@ -194,7 +224,7 @@
   </div>
 
   <div class="card">
-    <div class="month-nav">
+    <div class="month-nav" id="monthNav">
       <button id="prevMonth" aria-label="Previous month">‹ Prev</button>
       <span class="month-label" id="monthLabel"></span>
       <button id="nextMonth" aria-label="Next month">Next ›</button>
@@ -232,7 +262,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="recurringCard">
     <details id="recurringDetails" class="section-details">
       <summary><h2>Recurring</h2></summary>
     <p class="hint" style="margin-top:0;margin-bottom:10px">Fixed monthly income and expenses — rent, loans, insurance, babysitting. Each one is added to your transactions automatically every month, on the day you pick.</p>
@@ -282,7 +312,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="budgetsCard">
     <h2>Monthly budgets</h2>
     <div id="budgetList"></div>
     <div class="budget-edit">
@@ -293,7 +323,7 @@
     <p class="hint">Budgets apply to the month shown above. Set a budget once and it carries to the next month until you change it.</p>
   </div>
 
-  <div class="card">
+  <div class="card" id="chartCard">
     <h2>Spending by month</h2>
     <div class="chart" id="chart"></div>
   </div>
@@ -374,6 +404,17 @@
   setupCollapsible("txDetails", "txOpen", true);
   setupCollapsible("insightsDetails", "insightsOpen", true);
 
+  // View mode (Monthly | Vacation) is per-device UI state, remembered
+  // locally like the collapsible sections — never synced.
+  var viewMode = loadUiState().viewMode === "vacation" ? "vacation" : "monthly";
+  function setViewMode(mode) {
+    viewMode = mode;
+    var ui = loadUiState();
+    ui.viewMode = mode;
+    try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* private mode: don't remember */ }
+    render();
+  }
+
   // Add any default categories missing from a saved list (e.g. Travel,
   // added after the data was first saved), in their default position:
   // before the next default category already in the list, else at the end.
@@ -405,14 +446,15 @@
   }
   function markDirty() { state.sync.dirty = true; }
 
-  // Deleted ids ("tombstones"). Sync merges transactions by id, so without
-  // these a transaction deleted on one device comes back from the other
-  // device on the next sync. Tombstones are kept (the list stays tiny)
-  // and travel with the sync payload so every device honors them.
+  // Deleted ids ("tombstones"). Sync merges transactions — and pool
+  // contributions — by id, so without these a transaction deleted on one
+  // device comes back from the other device on the next sync. Tombstones
+  // are kept (the list stays tiny) and travel with the sync payload so
+  // every device honors them.
   function normalizeDeleted(del) {
-    var out = { txs: [], recurring: [] };
+    var out = { txs: [], recurring: [], pool: [] };
     if (del) {
-      ["txs", "recurring"].forEach(function (kind) {
+      ["txs", "recurring", "pool"].forEach(function (kind) {
         (del[kind] || []).forEach(function (id) {
           var s = String(id);
           if (out[kind].indexOf(s) === -1) out[kind].push(s);
@@ -442,13 +484,25 @@
         d.sync = d.sync || {};
         d.recurring = d.recurring || [];
         d.deleted = normalizeDeleted(d.deleted);
+        d.vacation = normalizeVacation(d.vacation);
         // State saved before the dirty flag existed: treat existing local
         // data as unsynced (push it), an empty device as clean (pull).
         if (d.sync.dirty === undefined) d.sync.dirty = hasLocalData(d);
         return d;
       }
     } catch (e) { /* corrupted storage: start fresh */ }
-    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [], deleted: { txs: [], recurring: [] } };
+    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [], deleted: { txs: [], recurring: [], pool: [] }, vacation: { name: "Aruba", budget: 0, pool: [] } };
+  }
+  // Trip fund: { name, budget, pool: [{id, amount, date}] }. Saved data
+  // from before this feature has no vacation field; default the trip to
+  // Aruba (Dec 2026) — rename it in the app for any other trip.
+  function normalizeVacation(v) {
+    if (!v || typeof v !== "object") return { name: "Aruba", budget: 0, pool: [] };
+    return {
+      name: typeof v.name === "string" && v.name.trim() ? v.name.trim() : "Aruba",
+      budget: typeof v.budget === "number" && v.budget > 0 ? v.budget : 0,
+      pool: Array.isArray(v.pool) ? v.pool.filter(function (p) { return p && typeof p.amount === "number" && p.amount > 0; }) : []
+    };
   }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
   // Removes a trailing "Pay Over Time" / "Pay In Full" from transaction
@@ -505,15 +559,23 @@
   // ---- elements ----
   var $ = function (id) { return document.getElementById(id); };
   var balanceValue = $("balanceValue"), monthIncome = $("monthIncome"), monthSpent = $("monthSpent"), monthSaved = $("monthSaved"),
+      balanceLabel = $("balanceLabel"),
       monthIncomeLabel = $("monthIncomeLabel"), monthSpentLabel = $("monthSpentLabel"), monthSavedLabel = $("monthSavedLabel"),
       monthLabel = $("monthLabel"), txList = $("txList"), txListTitle = $("txListTitle"),
       budgetList = $("budgetList"), chartEl = $("chart"),
       amountEl = $("amount"), categoryEl = $("category"), txDateEl = $("txDate"), noteEl = $("note"),
-      btnExpense = $("btnExpense"), btnIncome = $("btnIncome");
+      btnExpense = $("btnExpense"), btnIncome = $("btnIncome"),
+      insightsCard = $("insightsCard"), recurringCard = $("recurringCard"),
+      budgetsCard = $("budgetsCard"), chartCard = $("chartCard"),
+      tripCard = $("tripCard"), monthNav = $("monthNav"),
+      tripNameEl = $("tripName"), tripBudgetEl = $("tripBudget"), poolAmountEl = $("poolAmount"),
+      poolList = $("poolList"), poolHint = $("poolHint");
 
   function txsInMonth(y, m) {
     var k = monthKey(y, m);
-    return state.txs.filter(function (t) { return keyOf(t.date) === k; });
+    // Monthly views exclude vacation transactions — the trip is a
+    // separate pot (they still count in the all-time Balance).
+    return state.txs.filter(function (t) { return keyOf(t.date) === k && !t.vacation; });
   }
   function monthTotals(y, m) {
     var inc = 0, exp = 0;
@@ -526,6 +588,19 @@
     var b = 0;
     state.txs.forEach(function (t) { b += t.type === "income" ? t.amount : -t.amount; });
     return b;
+  }
+  // ---- Vacation (separate pot) ----
+  function vacTxs() { return state.txs.filter(function (t) { return !!t.vacation; }); }
+  // Trip spending, net of any trip refunds (income on the trip).
+  function vacSpent() {
+    var s = 0;
+    vacTxs().forEach(function (t) { s += t.type === "income" ? -t.amount : t.amount; });
+    return s;
+  }
+  function poolTotal() {
+    var s = 0;
+    (state.vacation.pool || []).forEach(function (p) { s += p.amount; });
+    return s;
   }
   // Budget for a category in a given month: the most recent budget set on or before that month.
   function budgetFor(cat, y, m) {
@@ -638,7 +713,7 @@
     var el = $("insightsList");
     if (!el) return;
     $("insightsTitle").textContent = "Insights · " + MONTHS[viewMonth] + " " + viewYear;
-    var items = computeInsights(state.txs, state.budgets, state.categories, viewYear, viewMonth, new Date());
+    var items = computeInsights(state.txs.filter(function (t) { return !t.vacation; }), state.budgets, state.categories, viewYear, viewMonth, new Date());
     if (!items.length) {
       el.innerHTML = '<p class="empty">No insights yet — add transactions to see them.</p>';
       return;
@@ -666,7 +741,27 @@
   }
 
   function render() {
+    state.vacation = normalizeVacation(state.vacation);
+    var vac = viewMode === "vacation";
+    // Show the right sections for the mode.
+    tripCard.style.display = vac ? "" : "none";
+    insightsCard.style.display = vac ? "none" : "";
+    recurringCard.style.display = vac ? "none" : "";
+    budgetsCard.style.display = vac ? "none" : "";
+    chartCard.style.display = vac ? "none" : "";
+    monthNav.style.display = vac ? "none" : "";
+    $("viewMonthly").className = vac ? "" : "active-view";
+    $("viewVacation").className = vac ? "active-view" : "";
+    $("addTx").textContent = vac ? "Add to trip" : "Add transaction";
+    if (vac) {
+      renderVacationHeader();
+      renderTrip();
+      txListTitle.textContent = state.vacation.name + " transactions";
+      renderTxList(vacTxs().slice().sort(txByDateDesc), true);
+      return;
+    }
     var b = balance();
+    balanceLabel.textContent = "Balance";
     balanceValue.textContent = money(b);
     balanceValue.className = "value" + (b < 0 ? " neg" : b > 0 ? " pos" : "");
     var t = monthTotals(viewYear, viewMonth);
@@ -720,30 +815,95 @@
     }).join("");
 
     // transactions, newest first
-    var list = txsInMonth(viewYear, viewMonth).slice().sort(function (a, c2) {
-      return a.date < c2.date ? 1 : a.date > c2.date ? -1 : 0;
-    });
+    renderTxList(txsInMonth(viewYear, viewMonth).slice().sort(txByDateDesc), false);
+    renderRecurring();
+    renderInsights();
+  }
+
+  function txByDateDesc(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; }
+  // Transaction list, shared by both views. When isVac is true this is the
+  // trip list (the move button sends a transaction back to monthly);
+  // otherwise the monthly list (the move button sends it to the trip).
+  function renderTxList(list, isVac) {
     if (!list.length) {
-      txList.innerHTML = '<p class="empty">No transactions this month yet.</p>';
+      txList.innerHTML = '<p class="empty">' + (isVac ? "No trip transactions yet." : "No transactions this month yet.") + "</p>";
+      return;
+    }
+    txList.innerHTML = list.map(function (t) {
+      var sign = t.type === "income" ? "+" : "−";
+      var moveTitle = isVac ? "Move back to monthly" : "Move to vacation";
+      return '<div class="tx"><div class="tx-main"><span class="tx-cat">' + esc(t.category) + '</span>' +
+        '<span class="tx-note">' + esc(t.date) + (t.note ? " · " + esc(t.note) : "") + (t.recurringId ? " 🔁" : "") + '</span></div>' +
+        '<div class="tx-right"><span class="tx-amt ' + (t.type === "income" ? "inc" : "exp") + '">' + sign + money(Math.abs(t.amount)) + '</span>' +
+        '<button class="tx-move" data-move="' + t.id + '" aria-label="' + moveTitle + '" title="' + moveTitle + '">' + (isVac ? "↩" : "✈️") + '</button>' +
+        '<button class="tx-del" data-id="' + t.id + '" aria-label="Delete">×</button></div></div>';
+    }).join("");
+    txList.querySelectorAll(".tx-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        tombstone("txs", btn.getAttribute("data-id"));
+        state.txs = state.txs.filter(function (t) { return String(t.id) !== btn.getAttribute("data-id"); });
+        markDirty();
+        save(); render();
+      });
+    });
+    txList.querySelectorAll(".tx-move").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-move");
+        state.txs.forEach(function (t) { if (String(t.id) === id) t.vacation = !isVac; });
+        markDirty();
+        save(); render();
+      });
+    });
+  }
+  // Vacation header: the four boxes become Trip budget / In the pool /
+  // Spent / Left in pool.
+  function renderVacationHeader() {
+    var trip = state.vacation;
+    var spent = vacSpent(), pool = poolTotal(), left = pool - spent;
+    balanceLabel.textContent = "Trip budget";
+    balanceValue.textContent = money(trip.budget);
+    balanceValue.className = "value";
+    monthIncomeLabel.textContent = "In the pool";
+    monthIncome.textContent = money(pool);
+    monthIncome.className = "value pos";
+    monthSpentLabel.textContent = "Spent · " + trip.name;
+    monthSpent.textContent = money(spent);
+    monthSpent.className = "value neg";
+    monthSavedLabel.textContent = "Left in pool";
+    monthSaved.textContent = money(left);
+    monthSaved.className = "value" + (left < 0 ? " neg" : left > 0 ? " pos" : "");
+  }
+  function renderTrip() {
+    var trip = state.vacation;
+    // Don't clobber text the user is typing: only fill an input when it
+    // isn't the one being edited.
+    if (document.activeElement !== tripNameEl) tripNameEl.value = trip.name;
+    if (document.activeElement !== tripBudgetEl) tripBudgetEl.value = trip.budget > 0 ? trip.budget : "";
+    var pool = poolTotal();
+    if (trip.budget > 0 && pool < trip.budget) {
+      poolHint.textContent = "Set aside " + money(trip.budget - pool) + " more to fully fund your " + money(trip.budget) + " trip.";
+    } else if (trip.budget > 0) {
+      poolHint.textContent = "✓ Trip fully funded.";
     } else {
-      txList.innerHTML = list.map(function (t) {
-        var sign = t.type === "income" ? "+" : "−";
-        return '<div class="tx"><div class="tx-main"><span class="tx-cat">' + esc(t.category) + '</span>' +
-          '<span class="tx-note">' + esc(t.date) + (t.note ? " · " + esc(t.note) : "") + (t.recurringId ? " 🔁" : "") + '</span></div>' +
-          '<div class="tx-right"><span class="tx-amt ' + (t.type === "income" ? "inc" : "exp") + '">' + sign + money(Math.abs(t.amount)) + '</span>' +
-          '<button class="tx-del" data-id="' + t.id + '" aria-label="Delete">×</button></div></div>';
+      poolHint.textContent = "Set a trip budget above, and add money to the pool as you set it aside.";
+    }
+    var plist = trip.pool || [];
+    if (!plist.length) {
+      poolList.innerHTML = '<p class="empty">Nothing in the pool yet.</p>';
+    } else {
+      poolList.innerHTML = plist.slice().sort(txByDateDesc).map(function (p) {
+        return '<div class="pool-row"><span>' + esc(p.date) + '</span><span><strong>' + money(p.amount) + '</strong> ' +
+          '<button class="tx-del" data-pool="' + p.id + '" aria-label="Remove">×</button></span></div>';
       }).join("");
-      txList.querySelectorAll(".tx-del").forEach(function (btn) {
+      poolList.querySelectorAll("[data-pool]").forEach(function (btn) {
         btn.addEventListener("click", function () {
-          tombstone("txs", btn.getAttribute("data-id"));
-          state.txs = state.txs.filter(function (t) { return String(t.id) !== btn.getAttribute("data-id"); });
+          tombstone("pool", btn.getAttribute("data-pool"));
+          state.vacation.pool = (state.vacation.pool || []).filter(function (p) { return String(p.id) !== btn.getAttribute("data-pool"); });
           markDirty();
           save(); render();
         });
       });
     }
-    renderRecurring();
-    renderInsights();
   }
 
   function setType(t) {
@@ -753,6 +913,25 @@
   }
   btnExpense.addEventListener("click", function () { setType("expense"); });
   btnIncome.addEventListener("click", function () { setType("income"); });
+
+  $("viewMonthly").addEventListener("click", function () { setViewMode("monthly"); });
+  $("viewVacation").addEventListener("click", function () { setViewMode("vacation"); });
+  $("saveTrip").addEventListener("click", function () {
+    var name = tripNameEl.value.trim();
+    var bud = parseFloat(tripBudgetEl.value);
+    if (name) state.vacation.name = name;
+    state.vacation.budget = (!bud || bud < 0) ? 0 : Math.round(bud * 100) / 100;
+    markDirty();
+    save(); render();
+  });
+  $("addPool").addEventListener("click", function () {
+    var amt = parseFloat(poolAmountEl.value);
+    if (!amt || amt <= 0) { poolAmountEl.focus(); return; }
+    state.vacation.pool.push({ id: Date.now(), amount: Math.round(amt * 100) / 100, date: new Date().toISOString().slice(0, 10) });
+    poolAmountEl.value = "";
+    markDirty();
+    save(); render();
+  });
 
   $("addTx").addEventListener("click", function () {
     var amt = parseFloat(amountEl.value);
@@ -764,10 +943,13 @@
       amount: Math.round(amt * 100) / 100,
       category: entryType === "income" ? "Income" : categoryEl.value,
       date: date,
-      note: noteEl.value.trim()
+      note: noteEl.value.trim(),
+      vacation: viewMode === "vacation"
     });
-    var d = new Date(date + "T12:00:00");
-    viewYear = d.getFullYear(); viewMonth = d.getMonth();
+    if (viewMode === "monthly") {
+      var d = new Date(date + "T12:00:00");
+      viewYear = d.getFullYear(); viewMonth = d.getMonth();
+    }
     amountEl.value = ""; noteEl.value = "";
     markDirty();
     save(); render();
@@ -876,7 +1058,8 @@
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
         var del = normalizeDeleted(d.deleted);
-        state = { txs: d.txs.filter(function (t) { return del.txs.indexOf(String(t.id)) === -1; }), categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: (d.recurring || []).filter(function (r) { return del.recurring.indexOf(String(r.id)) === -1; }), deleted: del };
+        state = { txs: d.txs.filter(function (t) { return del.txs.indexOf(String(t.id)) === -1; }), categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: (d.recurring || []).filter(function (r) { return del.recurring.indexOf(String(r.id)) === -1; }), deleted: del, vacation: normalizeVacation(d.vacation) };
+        state.vacation.pool = withoutDead(state.vacation.pool, "pool");
         state.sync.dirty = true;
         save(); renderCategories(); render();
         alert("Imported " + state.txs.length + " transactions.");
@@ -899,7 +1082,7 @@
     showSync(state.sync.url ? "Sync settings saved." : "Sync is off.", state.sync.url ? "ok" : "");
   });
   function syncPayload() {
-    return { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, deleted: normalizeDeleted(state.deleted) };
+    return { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, deleted: normalizeDeleted(state.deleted), vacation: normalizeVacation(state.vacation) };
   }
   // Pull-then-push sync. When this device has unsynced changes, fetch the
   // server's copy first and merge it in, so pushing doesn't overwrite
@@ -945,10 +1128,12 @@
   // copy when it is newer and at least as complete, else merge.
   function applyRemoteData(remote) {
     if (remote && remote.data && Array.isArray(remote.data.txs)) {
+      state.vacation = normalizeVacation(state.vacation);
       // Merge tombstones first: a delete made on any device wins everywhere.
       state.deleted = normalizeDeleted({
         txs: ((state.deleted && state.deleted.txs) || []).concat((remote.data.deleted && remote.data.deleted.txs) || []),
-        recurring: ((state.deleted && state.deleted.recurring) || []).concat((remote.data.deleted && remote.data.deleted.recurring) || [])
+        recurring: ((state.deleted && state.deleted.recurring) || []).concat((remote.data.deleted && remote.data.deleted.recurring) || []),
+        pool: ((state.deleted && state.deleted.pool) || []).concat((remote.data.deleted && remote.data.deleted.pool) || [])
       });
       var mine = state.txs.length, theirs = remote.data.txs.length;
       var byId = {};
@@ -960,11 +1145,25 @@
       if ((remote.updatedAt || 0) > (state.sync.lastSyncAt || 0) && theirs >= mine) {
         state.categories = remote.data.categories || state.categories;
         state.budgets = remote.data.budgets || state.budgets;
+        // Trip name/budget adopt the newer copy (older remotes have no
+        // vacation field — never let that reset the local trip).
+        if (remote.data.vacation) {
+          var rv = normalizeVacation(remote.data.vacation);
+          state.vacation.name = rv.name;
+          state.vacation.budget = rv.budget;
+        }
       } else {
         (remote.data.categories || []).forEach(function (c) { if (state.categories.indexOf(c) === -1) state.categories.push(c); });
         Object.keys(remote.data.budgets || {}).forEach(function (cat) {
           state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
         });
+      }
+      // Pool contributions always merge by id (minus tombstones), in both
+      // branches — adding money on two devices between syncs keeps both.
+      if (remote.data.vacation && Array.isArray(remote.data.vacation.pool)) {
+        var poolById = {};
+        (state.vacation.pool || []).concat(remote.data.vacation.pool).forEach(function (p) { if (p && p.id) poolById[p.id] = p; });
+        state.vacation.pool = withoutDead(Object.keys(poolById).map(function (k) { return poolById[k]; }), "pool");
       }
     }
     // Clean any type words off notes that arrived from another device or
