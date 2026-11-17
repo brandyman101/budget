@@ -373,6 +373,9 @@
         <input type="url" id="workerUrl" placeholder="https://budget-bridge.yourname.workers.dev">
         <label for="workerSecret" style="margin-top:8px">Sync: shared secret</label>
         <input type="password" id="workerSecret" placeholder="Secret set on the Worker">
+        <label for="encryptPass" style="margin-top:8px">Encryption passphrase (optional)</label>
+        <input type="password" id="encryptPass" placeholder="Passphrase to encrypt synced data">
+        <p class="hint">With a passphrase set, your data is encrypted on this device before it syncs — the server only ever holds scrambled text. Use the same passphrase on every device. If you forget it, the synced copy can't be read back.</p>
         <div class="settings-row">
           <button class="btn-secondary" id="saveSync">Save sync settings</button>
           <button class="btn-secondary" id="syncNow">Sync now</button>
@@ -1248,48 +1251,132 @@
   function showSync(msg, cls) { syncStatus.textContent = msg; syncStatus.className = "sync-status " + (cls || ""); }
   if (state.sync.url) $("workerUrl").value = state.sync.url;
   if (state.sync.secret) $("workerSecret").value = state.sync.secret;
+  if (state.sync.passphrase) $("encryptPass").value = state.sync.passphrase;
   if (state.sync.url) showSync("Sync configured. Last sync: " + (state.sync.lastSync || "never") + ".", "ok");
   $("saveSync").addEventListener("click", function () {
     state.sync.url = $("workerUrl").value.trim().replace(/\/$/, "");
     state.sync.secret = $("workerSecret").value;
+    state.sync.passphrase = $("encryptPass").value;
     save();
     showSync(state.sync.url ? "Sync settings saved." : "Sync is off.", state.sync.url ? "ok" : "");
   });
   function syncPayload() {
     return { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, deleted: normalizeDeleted(state.deleted), vacation: normalizeVacation(state.vacation) };
   }
+  // ---- end-to-end encryption for sync (2026-11-17) ----
+  // With a passphrase set, the sync payload is encrypted on this device
+  // before it leaves (AES-256-GCM, key from PBKDF2-SHA-256, 250k rounds,
+  // fresh random salt + IV per push). The Worker only ever stores the
+  // envelope {enc, v, salt, iv, ct} and can't read it; neither can
+  // anyone with the Worker secret or Cloudflare access. The passphrase
+  // itself never leaves the device — it's kept in localStorage next to
+  // the sync settings, like the Worker secret. No passphrase = the old
+  // plaintext sync, unchanged.
+  var PBKDF2_ROUNDS = 250000;
+  function b64encode(bytes) {
+    var s = "";
+    bytes.forEach(function (b) { s += String.fromCharCode(b); });
+    return btoa(s);
+  }
+  function b64decode(str) {
+    var bin = atob(str), out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function deriveKey(passphrase, salt) {
+    return crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]).then(function (km) {
+      return crypto.subtle.deriveKey({ name: "PBKDF2", salt: salt, iterations: PBKDF2_ROUNDS, hash: "SHA-256" }, km, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+    });
+  }
+  function encryptPayload(obj, passphrase) {
+    var salt = crypto.getRandomValues(new Uint8Array(16));
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    return deriveKey(passphrase, salt).then(function (key) {
+      return crypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, new TextEncoder().encode(JSON.stringify(obj)));
+    }).then(function (ct) {
+      return { enc: true, v: 1, salt: b64encode(salt), iv: b64encode(iv), ct: b64encode(new Uint8Array(ct)) };
+    });
+  }
+  function decryptPayload(env, passphrase) {
+    // Decode up front, inside a rejection (not a throw): a malformed
+    // envelope must reject like a wrong passphrase, never throw
+    // synchronously out of a caller that expects a promise.
+    var salt, iv, ct;
+    try {
+      salt = b64decode(env.salt); iv = b64decode(env.iv); ct = b64decode(env.ct);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return deriveKey(passphrase, salt).then(function (key) {
+      return crypto.subtle.decrypt({ name: "AES-GCM", iv: iv }, key, ct);
+    }).then(function (pt) {
+      return JSON.parse(new TextDecoder().decode(pt));
+    });
+  }
+  function isEnvelope(data) { return !!(data && data.enc === true && typeof data.ct === "string"); }
   // Pull-then-push sync. When this device has unsynced changes, fetch the
   // server's copy first and merge it in, so pushing doesn't overwrite
   // another device's additions. When clean, the pull alone is the sync.
   // (Two devices syncing in the same instant can still race — the Worker
   // keeps the last write — but sequential syncs now always converge.)
-  function performSync(url, secret) {
+  function performSync(url, secret, passphrase) {
     var wasDirty = !!state.sync.dirty;
+    var usedEncryption = false;
     var headers = { "Content-Type": "application/json", "Authorization": "Bearer " + secret };
+    function sendData() {
+      // Encrypt the payload when a passphrase is set; otherwise send it
+      // as before (plaintext, backward compatible).
+      if (passphrase) { usedEncryption = true; return encryptPayload(syncPayload(), passphrase); }
+      return Promise.resolve(syncPayload());
+    }
+    // Unwrap the server's copy: decrypt it when it's an envelope, pass
+    // plaintext through untouched (pre-encryption data still syncs, and
+    // the next push encrypts it). Throws when the envelope can't be
+    // opened — the sync aborts before any push, so an undecryptable
+    // server copy is never overwritten.
+    function unwrapRemote(remote) {
+      if (!remote || !isEnvelope(remote.data)) return Promise.resolve(remote);
+      usedEncryption = true;
+      if (!passphrase) return Promise.reject(new Error("the synced data is encrypted — enter your passphrase in Settings to sync."));
+      return decryptPayload(remote.data, passphrase).then(function (data) {
+        return { data: data, updatedAt: remote.updatedAt };
+      }).catch(function () {
+        throw new Error("wrong passphrase — the synced data couldn't be unlocked.");
+      });
+    }
     function post(clientUpdatedAt) {
-      return fetch(url + "/sync", {
-        method: "POST",
-        headers: headers,
-        body: JSON.stringify({ data: syncPayload(), clientUpdatedAt: clientUpdatedAt })
+      return sendData().then(function (data) {
+        return fetch(url + "/sync", {
+          method: "POST",
+          headers: headers,
+          body: JSON.stringify({ data: data, clientUpdatedAt: clientUpdatedAt })
+        });
       }).then(function (res) {
         if (res.status === 401 || res.status === 403) throw new Error("Worker rejected the secret (unauthorized).");
+        if (res.status === 400 && passphrase) throw new Error("the Worker needs the encryption update — redeploy worker.js first.");
         if (!res.ok) throw new Error("Worker returned HTTP " + res.status + ".");
         return res.json();
+      }).then(function (remote) {
+        return unwrapRemote(remote);
       });
     }
     return post(state.sync.lastSyncAt || 0).then(function (remote) {
       applyRemoteData(remote);
-      if (!wasDirty) return;
-      return post(Date.now()).then(function (remote2) { applyRemoteData(remote2); });
+      if (!wasDirty) return { encrypted: usedEncryption };
+      return post(Date.now()).then(function (remote2) { applyRemoteData(remote2); return { encrypted: usedEncryption }; });
     });
   }
   $("syncNow").addEventListener("click", function () {
     var url = ($("workerUrl").value || state.sync.url || "").trim().replace(/\/$/, "");
     var secret = $("workerSecret").value || state.sync.secret || "";
+    var passphrase = $("encryptPass").value || state.sync.passphrase || "";
     if (!url || !secret) { showSync("Set a Worker URL and secret first.", "err"); return; }
     showSync("Syncing…");
-    performSync(url, secret).then(function () {
-      showSync("Synced " + state.sync.lastSync + ".", "ok");
+    performSync(url, secret, passphrase).then(function (result) {
+      // Only a passphrase that actually worked gets remembered — a wrong
+      // one must never be saved over the good one.
+      if (passphrase) { state.sync.passphrase = passphrase; save(); }
+      showSync("Synced " + state.sync.lastSync + (result.encrypted ? " · encrypted." : "."), "ok");
     }).catch(function (err) {
       showSync("Sync failed: " + err.message, "err");
     });
