@@ -85,6 +85,8 @@
   }
   /* Budgets */
   .budget-item { margin-bottom: 14px; }
+  .budget-group { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 16px 0 8px; }
+  .budget-group:first-child { margin-top: 0; }
   .budget-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
   .budget-head .cat { font-weight: 600; }
   .budget-head .nums { font-size: 0.85rem; color: var(--muted); }
@@ -367,7 +369,10 @@
 (function () {
   "use strict";
   var STORE_KEY = "budget-tracker-v1";
-  var DEFAULT_CATS = ["Groceries", "Rent", "Dining", "Transport", "Travel", "Utilities", "Entertainment", "Health", "Other"];
+  // Transport was retired 2026-11-16 (Avi); Gas took its slot.
+  // ensureDefaultCats drops "Transport" from saved lists so it never
+  // comes back from an old device or import.
+  var DEFAULT_CATS = ["Groceries", "Rent", "Dining", "Gas", "Travel", "Utilities", "Entertainment", "Health", "Other"];
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
   var state = load();
@@ -422,8 +427,14 @@
   // added after the data was first saved), in their default position:
   // before the next default category already in the list, else at the end.
   function ensureDefaultCats(cats) {
+    // Drop retired categories (Transport, retired 2026-11-16 at Avi's
+    // request) so they never reappear from an old device or import.
+    cats = cats.filter(function (c) { return c !== "Transport"; });
     DEFAULT_CATS.forEach(function (c) {
-      if (cats.indexOf(c) !== -1) return;
+      // Case-insensitive presence check: Avi's own "gas" category (his
+      // spelling) counts as the "Gas" default — never add a second one.
+      var present = cats.some(function (x) { return x.toLowerCase() === c.toLowerCase(); });
+      if (present) return;
       var at = -1;
       for (var i = DEFAULT_CATS.indexOf(c) + 1; i < DEFAULT_CATS.length; i++) {
         var nextAt = cats.indexOf(DEFAULT_CATS[i]);
@@ -800,7 +811,16 @@
     if (!cats.length) {
       budgetList.innerHTML = '<p class="empty">No budgets set yet. Pick a category and set a monthly amount below.</p>';
     } else {
-      budgetList.innerHTML = cats.map(function (c, i) {
+      // Group the list: categories with a recurring item under "Recurring",
+      // the rest under "Standard". Headings only appear when both groups
+      // have rows — a single group renders plain, as before.
+      var recCats = {};
+      state.recurring.forEach(function (r) { recCats[r.category] = true; });
+      var recGroup = cats.filter(function (c) { return recCats[c]; });
+      var stdGroup = cats.filter(function (c) { return !recCats[c]; });
+      var grouped = recGroup.length > 0 && stdGroup.length > 0;
+      var n = 0;
+      var rowHtml = function (c) {
         var bud = budgetFor(c, viewYear, viewMonth), spent = spentByCat[c] || 0;
         var pct = bud > 0 ? Math.min(100, Math.round(spent / bud * 100)) : 0;
         var cls = bud > 0 && spent > bud ? "over" : pct >= 80 ? "warn" : "";
@@ -811,8 +831,14 @@
         // (see animateBars) — the CSS transition does the tweening.
         return '<div class="budget-item"><div class="budget-head"><span class="cat">' + esc(c) + '</span>' +
           '<span class="nums' + (spent > bud && bud > 0 ? " over" : "") + '">' + esc(right) + '</span></div>' +
-          '<div class="bar-track"><div class="bar-fill ' + cls + '" data-w="' + pct + '" style="width:0%;transition-delay:' + Math.min(i * 40, 400) + 'ms"></div></div></div>';
-      }).join("");
+          '<div class="bar-track"><div class="bar-fill ' + cls + '" data-w="' + pct + '" style="width:0%;transition-delay:' + Math.min(n++ * 40, 400) + 'ms"></div></div></div>';
+      };
+      var html = "";
+      if (grouped) html += '<div class="budget-group">Recurring</div>';
+      html += recGroup.map(rowHtml).join("");
+      if (grouped) html += '<div class="budget-group">Standard</div>';
+      html += stdGroup.map(rowHtml).join("");
+      budgetList.innerHTML = html;
     }
 
     // chart: last 6 months including viewed month
@@ -1034,7 +1060,9 @@
         tombstone("recurring", btn.getAttribute("data-id"));
         state.recurring = (state.recurring || []).filter(function (r) { return String(r.id) !== btn.getAttribute("data-id"); });
         markDirty();
-        save(); renderRecurring();
+        // Full render (not just the recurring list): the budgets list
+        // groups by recurring categories, so it must update too.
+        save(); render();
       });
     });
   }
@@ -1199,6 +1227,10 @@
           state.budgets[cat] = Object.assign({}, remote.data.budgets[cat], state.budgets[cat] || {});
         });
       }
+      // Normalize categories after the merge: drops retired categories
+      // (Transport) a stale device may have sent back, and adds any
+      // missing defaults.
+      state.categories = ensureDefaultCats(state.categories);
       // Pool contributions always merge by id (minus tombstones), in both
       // branches — adding money on two devices between syncs keeps both.
       if (remote.data.vacation && Array.isArray(remote.data.vacation.pool)) {
@@ -1223,12 +1255,16 @@
   var CAT_KEYWORDS = [
     ["Groceries", ["aron", "kissena", "supermarket", "grocery", "groceries", "food market", "stop & shop", "stop and shop", "trader joe", "whole foods", "key food", "c-town", "ctown", "costco", "bj's", "aldi", "foodtown", "shoprite", "fairway"]],
     ["Dining", ["uber eats", "ubereats", "doordash", "grubhub", "seamless", "restaurant", "cafe", "coffee", "pizza", "starbucks", "dunkin", "chipotle", "mcdonald", "burger", "sushi", "grill", "bakery", "bagel", "deli", "eatery", "kitchen", "tacos", "thai", "chinese", "diners", "brunch", "bistro", "pizzeria"]],
-    ["Transport", ["uber", "lyft", "shell", "exxon", "mobil", "chevron", "sunoco", "mta", "metrocard", "parking", "e-zpass", "ezpass", "toll", "delta air", "jetblue", "united air", "amtrak", "citibike"]],
-    ["Travel", ["hotel", "motel", "airbnb", "vrbo", "marriott", "hilton", "hyatt", "expedia", "booking.com", "kayak", "priceline", "agoda", "resort", "lodge", "hostel", "tripadvisor", "vacation rental"]],
+    ["Travel", ["hotel", "motel", "airbnb", "vrbo", "marriott", "hilton", "hyatt", "expedia", "booking.com", "kayak", "priceline", "agoda", "resort", "lodge", "hostel", "tripadvisor", "vacation rental", "delta air", "jetblue", "united air", "amtrak"]],
     ["Utilities", ["con ed", "coned", "national grid", "verizon", "t-mobile", "tmobile", "at&t", "optimum", "spectrum", "water bill", "electric", "internet", "phone bill"]],
     ["Health", ["pharmacy", "cvs", "walgreens", "duane reade", "rite aid", "dentist", "dental", "doctor", "medical", "urgent care", "optical", "vision"]],
     ["Entertainment", ["netflix", "spotify", "hulu", "disney+", "movie", "amc", "regal", "ticketmaster", "concert", "show", "museum", "zoo", "aquarium"]],
-    ["Rent", ["rent", "landlord", "property mgmt", "property management", "apartment"]]
+    ["Rent", ["rent", "landlord", "property mgmt", "property management", "apartment"]],
+    // Gas last, on purpose: "mobil" is a substring of "t-mobile", so the
+    // Utilities row above must win for phone bills. (Transport was
+    // retired 2026-11-16: plain Uber, Lyft and transit now fall through
+    // to Other; "uber eats" still matches Dining above.)
+    ["Gas", ["shell", "exxon", "mobil", "chevron", "sunoco"]]
   ];
   var SKIP_LINE = /^(date|description|amount|transactions?|activity|statement|balance|total|payment due|minimum payment|previous balance|new balance|payments? and credits?|thank you|autopay|auto pay|ending balance|beginning balance)\b/i;
 
@@ -1236,7 +1272,17 @@
     var d = desc.toLowerCase();
     for (var i = 0; i < CAT_KEYWORDS.length; i++) {
       for (var j = 0; j < CAT_KEYWORDS[i][1].length; j++) {
-        if (d.indexOf(CAT_KEYWORDS[i][1][j]) !== -1) return CAT_KEYWORDS[i][0];
+        if (d.indexOf(CAT_KEYWORDS[i][1][j]) !== -1) {
+          var cat = CAT_KEYWORDS[i][0];
+          // Gas: use Avi's own spelling of the category if he has one
+          // ("gas" vs "Gas") so imports land in his existing category.
+          if (cat === "Gas") {
+            for (var k = 0; k < state.categories.length; k++) {
+              if (state.categories[k].toLowerCase() === "gas") return state.categories[k];
+            }
+          }
+          return cat;
+        }
       }
     }
     return "Other";
