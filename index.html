@@ -114,8 +114,21 @@
   .chart-val { font-size: 0.7rem; color: var(--muted); margin-bottom: 4px; }
   .chart-bar { width: 100%; max-width: 44px; background: var(--terra); border-radius: 6px 6px 0 0; min-height: 4px; transition: height 0.5s ease-out; }
   @media (prefers-reduced-motion: reduce) {
-    .chart-bar, .bar-fill { transition: none !important; }
+    .chart-bar, .bar-fill, .donut-seg { transition: none !important; }
   }
+  /* Doughnut chart (Cash Flow tab) */
+  .donut-wrap { display: flex; flex-direction: column; align-items: center; }
+  .donut-svg { width: 200px; height: 200px; }
+  .donut-seg { transition: stroke-dasharray 0.5s ease-out, stroke-dashoffset 0.5s ease-out; }
+  .donut-center-amt { font-size: 1.4rem; font-weight: 700; fill: var(--ink); }
+  .donut-center-lab { font-size: 0.75rem; fill: var(--muted); }
+  .donut-legend { width: 100%; margin-top: 12px; }
+  .donut-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .donut-row:last-child { border-bottom: none; }
+  .donut-swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+  .donut-cat { font-weight: 600; flex: 1; }
+  .donut-amt { font-weight: 700; }
+  .donut-pct { color: var(--muted); font-size: 0.85rem; width: 48px; text-align: right; }
   .chart-bar.current { background: var(--ink); }
   .chart-lab { font-size: 0.7rem; color: var(--muted); margin-top: 6px; }
   /* Settings */
@@ -175,6 +188,7 @@
   <div class="type-toggle view-toggle">
     <button id="viewMonthly" class="active-view">Monthly</button>
     <button id="viewVacation">✈️ Vacation</button>
+    <button id="viewCashflow">📊 Cash Flow</button>
   </div>
 
   <div class="card">
@@ -233,6 +247,7 @@
       <button id="nextMonth" aria-label="Next month">Next ›</button>
     </div>
 
+    <div id="addForm">
     <div class="type-toggle">
       <button id="btnExpense" class="active-expense">− Expense</button>
       <button id="btnIncome">+ Income</button>
@@ -263,6 +278,12 @@
       <input type="text" id="newCategory" placeholder="New category name">
       <button class="btn-secondary" id="addCategory">Add category</button>
     </div>
+    </div>
+  </div>
+
+  <div class="card" id="cashflowCard" style="display:none">
+    <h2 id="cashflowTitle">Cash flow</h2>
+    <div id="cashflowBody"></div>
   </div>
 
   <div class="card" id="recurringCard">
@@ -298,7 +319,7 @@
     </details>
   </div>
 
-  <div class="card">
+  <div class="card" id="importCard">
     <h2>Import from screenshot or PDF</h2>
     <p class="hint" style="margin-top:0;margin-bottom:10px">Snap a photo of your card statement, or upload statement PDFs — you can pick several at once. The text is read on this device — your files are never uploaded anywhere.</p>
     <label class="import-drop" for="importImage">📷 Tap to choose a screenshot
@@ -331,7 +352,7 @@
     <div class="chart" id="chart"></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="txCard">
     <details id="txDetails" class="section-details" open>
       <summary><h2 id="txListTitle">Transactions</h2></summary>
       <div id="txList"></div>
@@ -410,9 +431,10 @@
   setupCollapsible("txDetails", "txOpen", true);
   setupCollapsible("insightsDetails", "insightsOpen", true);
 
-  // View mode (Monthly | Vacation) is per-device UI state, remembered
-  // locally like the collapsible sections — never synced.
-  var viewMode = loadUiState().viewMode === "vacation" ? "vacation" : "monthly";
+  // View mode (Monthly | Vacation | Cash Flow) is per-device UI state,
+  // remembered locally like the collapsible sections — never synced.
+  var _savedView = loadUiState().viewMode;
+  var viewMode = (_savedView === "vacation" || _savedView === "cashflow") ? _savedView : "monthly";
   function setViewMode(mode) {
     viewMode = mode;
     var ui = loadUiState();
@@ -592,6 +614,8 @@
       insightsCard = $("insightsCard"), recurringCard = $("recurringCard"),
       budgetsCard = $("budgetsCard"), chartCard = $("chartCard"),
       tripCard = $("tripCard"), monthNav = $("monthNav"),
+      cashflowCard = $("cashflowCard"), importCard = $("importCard"),
+      txCard = $("txCard"), addForm = $("addForm"),
       tripNameEl = $("tripName"), tripBudgetEl = $("tripBudget"), poolAmountEl = $("poolAmount"),
       poolList = $("poolList"), poolHint = $("poolHint");
 
@@ -767,21 +791,34 @@
   function render() {
     state.vacation = normalizeVacation(state.vacation);
     var vac = viewMode === "vacation";
+    var cf = viewMode === "cashflow";
     // Show the right sections for the mode.
     tripCard.style.display = vac ? "" : "none";
-    insightsCard.style.display = vac ? "none" : "";
-    recurringCard.style.display = vac ? "none" : "";
-    budgetsCard.style.display = vac ? "none" : "";
-    chartCard.style.display = vac ? "none" : "";
+    cashflowCard.style.display = cf ? "" : "none";
+    insightsCard.style.display = (vac || cf) ? "none" : "";
+    recurringCard.style.display = (vac || cf) ? "none" : "";
+    budgetsCard.style.display = (vac || cf) ? "none" : "";
+    chartCard.style.display = (vac || cf) ? "none" : "";
+    importCard.style.display = cf ? "none" : "";
+    txCard.style.display = cf ? "none" : "";
+    addForm.style.display = cf ? "none" : "";
     monthNav.style.display = vac ? "none" : "";
-    $("viewMonthly").className = vac ? "" : "active-view";
+    $("viewMonthly").className = viewMode === "monthly" ? "active-view" : "";
     $("viewVacation").className = vac ? "active-view" : "";
+    $("viewCashflow").className = cf ? "active-view" : "";
     $("addTx").textContent = vac ? "Add to trip" : "Add transaction";
     if (vac) {
       renderVacationHeader();
       renderTrip();
       txListTitle.textContent = state.vacation.name + " transactions";
       renderTxList(vacTxs().slice().sort(txByDateDesc), true);
+      return;
+    }
+    if (cf) {
+      renderCashflowHeader();
+      monthLabel.textContent = MONTHS[viewMonth] + " " + viewYear;
+      renderCashflow();
+      animateBars();
       return;
     }
     var b = balance();
@@ -863,11 +900,12 @@
     animateBars();
   }
 
-  // Grow the chart and budget bars to their target sizes. They render at
-  // their minimum size; the double requestAnimationFrame waits until the
-  // browser has painted that starting state, then the CSS transitions
-  // tween them to data-h / data-w. (prefers-reduced-motion disables the
-  // transitions in CSS, so those users jump straight to final sizes.)
+  // Grow the chart bars, budget bars and doughnut segments to their
+  // target sizes. They render at their minimum size; the double
+  // requestAnimationFrame waits until the browser has painted that
+  // starting state, then the CSS transitions tween them to data-h /
+  // data-w / data-len. (prefers-reduced-motion disables the transitions
+  // in CSS, so those users jump straight to final sizes.)
   function animateBars() {
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -876,6 +914,10 @@
         });
         document.querySelectorAll(".bar-fill[data-w]").forEach(function (bar) {
           bar.style.width = bar.getAttribute("data-w") + "%";
+        });
+        document.querySelectorAll(".donut-seg[data-len]").forEach(function (seg) {
+          seg.style.strokeDasharray = seg.getAttribute("data-len") + " " + (2 * Math.PI * 80).toFixed(2);
+          seg.style.strokeDashoffset = seg.getAttribute("data-off");
         });
       });
     });
@@ -934,6 +976,74 @@
     monthSaved.textContent = money(left);
     monthSaved.className = "value" + (left < 0 ? " neg" : left > 0 ? " pos" : "");
   }
+  // Cash Flow header: the four boxes become Balance / Money in /
+  // Money out / Net for the viewed month.
+  function renderCashflowHeader() {
+    var b = balance();
+    balanceLabel.textContent = "Balance";
+    balanceValue.textContent = money(b);
+    balanceValue.className = "value" + (b < 0 ? " neg" : b > 0 ? " pos" : "");
+    var t = monthTotals(viewYear, viewMonth);
+    monthIncomeLabel.textContent = "Money in · " + MONTHS[viewMonth];
+    monthIncome.textContent = money(t.income);
+    monthIncome.className = "value pos";
+    monthSpentLabel.textContent = "Money out · " + MONTHS[viewMonth];
+    monthSpent.textContent = money(t.spent);
+    monthSpent.className = "value neg";
+    var net = t.income - t.spent;
+    monthSavedLabel.textContent = "Net · " + MONTHS[viewMonth];
+    monthSaved.textContent = money(net);
+    monthSaved.className = "value" + (net < 0 ? " neg" : net > 0 ? " pos" : "");
+  }
+  // Doughnut chart colors, one per category by its position in the
+  // category list (so a category keeps its color across months; the list
+  // cycles for custom categories beyond the palette).
+  var CAT_COLORS = ["#c96f4a", "#4a7c9b", "#7a9b4a", "#d9a441", "#8e6bb8", "#4aa88a", "#d95f6e", "#5b6abf", "#a85f3d", "#6b8e7b"];
+  function catColor(cat, fallbackIdx) {
+    var i = state.categories.indexOf(cat);
+    if (i < 0) i = fallbackIdx;
+    return CAT_COLORS[i % CAT_COLORS.length];
+  }
+  function renderCashflow() {
+    $("cashflowTitle").textContent = "Cash flow · " + MONTHS[viewMonth] + " " + viewYear;
+    var spentByCat = {};
+    txsInMonth(viewYear, viewMonth).forEach(function (tx) {
+      if (tx.type === "expense") spentByCat[tx.category] = (spentByCat[tx.category] || 0) + tx.amount;
+    });
+    var rows = Object.keys(spentByCat).map(function (c) { return { cat: c, amt: spentByCat[c] }; })
+      .filter(function (r) { return r.amt > 0; })
+      .sort(function (a, b) { return b.amt - a.amt; });
+    var total = rows.reduce(function (s, r) { return s + r.amt; }, 0);
+    var body = $("cashflowBody");
+    if (!rows.length) {
+      body.innerHTML = '<p class="empty">No spending in ' + MONTHS[viewMonth] + ' yet.</p>';
+      return;
+    }
+    // Doughnut: one SVG circle per category. Circumference of r=80 is
+    // 2π×80 ≈ 502.65; each segment's dash length is its share of that,
+    // offset by the segments before it. The last segment takes the
+    // remainder so the ring joins perfectly. Segments render at length 0
+    // and grow to data-len on the next frame (see animateBars) — the CSS
+    // transition does the tweening.
+    var C = 2 * Math.PI * 80, off = 0;
+    var segs = rows.map(function (r, i) {
+      var len = (i === rows.length - 1) ? C - off : r.amt / total * C;
+      var s = '<circle class="donut-seg" cx="100" cy="100" r="80" fill="none" stroke="' + catColor(r.cat, i) + '" stroke-width="36" stroke-dasharray="0 ' + C.toFixed(2) + '" data-len="' + len.toFixed(2) + '" data-off="' + (-off).toFixed(2) + '" transform="rotate(-90 100 100)"/>';
+      off += len;
+      return s;
+    }).join("");
+    var legend = rows.map(function (r, i) {
+      var pct = (r.amt / total * 100).toFixed(1);
+      return '<div class="donut-row"><span class="donut-swatch" style="background:' + catColor(r.cat, i) + '"></span>' +
+        '<span class="donut-cat">' + esc(r.cat) + '</span>' +
+        '<span class="donut-amt">' + money(r.amt) + '</span>' +
+        '<span class="donut-pct">' + pct + '%</span></div>';
+    }).join("");
+    body.innerHTML = '<div class="donut-wrap"><svg class="donut-svg" viewBox="0 0 200 200" role="img" aria-label="Spending by category">' + segs +
+      '<text x="100" y="96" text-anchor="middle" class="donut-center-amt">$' + Math.round(total).toLocaleString() + '</text>' +
+      '<text x="100" y="118" text-anchor="middle" class="donut-center-lab">spent in ' + MONTHS[viewMonth] + '</text></svg>' +
+      '<div class="donut-legend">' + legend + '</div></div>';
+  }
   function renderTrip() {
     var trip = state.vacation;
     // Don't clobber text the user is typing: only fill an input when it
@@ -977,6 +1087,7 @@
 
   $("viewMonthly").addEventListener("click", function () { setViewMode("monthly"); });
   $("viewVacation").addEventListener("click", function () { setViewMode("vacation"); });
+  $("viewCashflow").addEventListener("click", function () { setViewMode("cashflow"); });
   $("saveTrip").addEventListener("click", function () {
     var name = tripNameEl.value.trim();
     var bud = parseFloat(tripBudgetEl.value);
