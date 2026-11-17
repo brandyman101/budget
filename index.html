@@ -511,11 +511,23 @@
   // Removes a trailing "Pay Over Time" / "Pay In Full" from transaction
   // notes (the Amex plan type that used to be swept into descriptions).
   // Returns true if any note changed. Idempotent: a clean note is a no-op.
+  // Strip a leading Samsung Pay marker from a merchant description:
+  // "SAMPAY *STARBUCKS" -> "STARBUCKS". The purchase still imports, just
+  // without the payment-method prefix (Avi, 2026-11-16). Leading only,
+  // case-insensitive; "samsung pay" covers the long form some statements
+  // print. A bare "SAMPAY" (no merchant) strips to "" and the caller
+  // drops the row; a bare "samsung" (buying a Samsung product) is
+  // untouched.
+  function stripSampay(desc) {
+    return desc.replace(/^(sampay|samsung pay)\s*[*•·\-–—:]*\s*/i, "").trim();
+  }
+
   function cleanTypeWords(txs) {
     var changed = false;
     (txs || []).forEach(function (t) {
       if (typeof t.note === "string") {
         var cleaned = t.note.replace(/(^|\s+)(pay over time|pay in full)$/i, "").trim();
+        cleaned = stripSampay(cleaned);
         if (cleaned !== t.note) { t.note = cleaned; changed = true; }
       }
     });
@@ -1283,11 +1295,7 @@
       var line = rawLine.replace(/\s+/g, " ").trim();
       if (!line || line.length < 4) return;
       if (SKIP_LINE.test(line)) return;
-      // Card payments and Samsung Pay lines are payment artifacts, not
-      // spending (Avi, 2026-11-16). "samsung pay" covers the long form
-      // some statements print; a bare "samsung" (buying a Samsung
-      // product) still imports.
-      if (/\b(payment|autopay|auto pay|sampay|samsung pay)\b/i.test(line)) return;
+      if (/\b(payment|autopay|auto pay)\b/i.test(line)) return; // card payments, not spending
       // amount at end of line: $1,234.56 or 1234.56, optional trailing - or CR
       var am = line.match(/\$?\s?([\d,]+\.\d{2})\s*(-|CR)?\s*$/i);
       if (!am) return;
@@ -1307,6 +1315,9 @@
       // "Pay In Full" as the last column, so it lands at the end of the
       // description). Trailing only, so merchant names are never touched.
       desc = desc.replace(/(^|\s+)(pay over time|pay in full)$/i, "").trim();
+      // Strip a leading Samsung Pay marker (see stripSampay). A bare
+      // "SAMPAY" with no merchant strips to "" and is dropped below.
+      desc = stripSampay(desc);
       if (!desc || desc.length < 2) return;
       if (/^(total|balance|payment)\b/i.test(desc)) return;
       rows.push({
