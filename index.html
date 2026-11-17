@@ -308,6 +308,7 @@
       <div>
         <label for="recCategory">Category</label>
         <select id="recCategory"></select>
+        <input type="text" id="recNewCategory" placeholder="New recurring category name" style="display:none;margin-top:8px">
       </div>
     </div>
     <div class="form-row">
@@ -780,21 +781,40 @@
     }).join("");
   }
 
+  // Categories with at least one recurring item are "recurring" categories;
+  // the rest are "standard". One definition, shared by the budgets list and
+  // by all three category dropdowns (split 2026-11-17).
+  function recurringCats() {
+    var out = {};
+    (state.recurring || []).forEach(function (r) { if (r.category) out[r.category] = true; });
+    return out;
+  }
+  function fillSelect(sel, cats, placeholder) {
+    sel.innerHTML = "";
+    cats.forEach(function (c) {
+      var o = document.createElement("option"); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+    if (!cats.length && placeholder) {
+      var o = document.createElement("option"); o.value = ""; o.textContent = placeholder; o.disabled = true; sel.appendChild(o);
+    }
+  }
   function renderCategories() {
-    categoryEl.innerHTML = "";
-    state.categories.forEach(function (c) {
-      var o = document.createElement("option"); o.value = c; o.textContent = c; categoryEl.appendChild(o);
-    });
-    var bc = $("budgetCategory");
-    bc.innerHTML = "";
-    state.categories.forEach(function (c) {
-      var o = document.createElement("option"); o.value = c; o.textContent = c; bc.appendChild(o);
-    });
+    var recCats = recurringCats();
+    var standard = state.categories.filter(function (c) { return !recCats[c]; });
+    var recurring = state.categories.filter(function (c) { return recCats[c]; });
+    // Standard transactions and budgets see standard categories only.
+    fillSelect(categoryEl, standard, "No standard categories — add one below");
+    fillSelect($("budgetCategory"), standard, "No standard categories");
+    // Recurring items see recurring categories only, plus a way to start a
+    // new recurring category (otherwise the first item in a new category
+    // could never be created).
     var rc = $("recCategory");
-    rc.innerHTML = "";
-    state.categories.forEach(function (c) {
-      var o = document.createElement("option"); o.value = c; o.textContent = c; rc.appendChild(o);
-    });
+    fillSelect(rc, recurring, "");
+    var o = document.createElement("option"); o.value = "__new__"; o.textContent = "+ New category…"; rc.appendChild(o);
+    syncRecNewCat();
+  }
+  function syncRecNewCat() {
+    $("recNewCategory").style.display = $("recCategory").value === "__new__" ? "" : "none";
   }
 
   function render() {
@@ -855,8 +875,7 @@
     // Recurring section, so the budgets list stays for the rest. (Grouping
     // under Recurring/Standard headings was tried first, 2026-11-16, and
     // replaced by hiding at Avi's request the same evening.)
-    var recCats = {};
-    state.recurring.forEach(function (r) { recCats[r.category] = true; });
+    var recCats = recurringCats();
     var cats = state.categories.filter(function (c) { return !recCats[c] && (budgetFor(c, viewYear, viewMonth) > 0 || spentByCat[c] > 0); });
     if (!cats.length) {
       var hidden = state.categories.filter(function (c) { return recCats[c] && (budgetFor(c, viewYear, viewMonth) > 0 || spentByCat[c] > 0); });
@@ -1117,6 +1136,9 @@
   $("addTx").addEventListener("click", function () {
     var amt = parseFloat(amountEl.value);
     if (!amt || amt <= 0) { amountEl.focus(); return; }
+    // No standard category to pick (every category is recurring): point at
+    // the Add category box instead of saving a category-less transaction.
+    if (entryType === "expense" && !categoryEl.value) { $("newCategory").focus(); return; }
     var date = txDateEl.value || new Date().toISOString().slice(0, 10);
     state.txs.push({
       id: Date.now(),
@@ -1174,13 +1196,20 @@
         tombstone("recurring", btn.getAttribute("data-id"));
         state.recurring = (state.recurring || []).filter(function (r) { return String(r.id) !== btn.getAttribute("data-id"); });
         markDirty();
-        // Full render (not just the recurring list): the budgets list
-        // groups by recurring categories, so it must update too.
-        save(); render();
+        // Full render (not just the recurring list): the budgets list and
+        // the category dropdowns split by recurring categories, so they
+        // must update too.
+        save(); renderCategories(); render();
       });
     });
   }
 
+  // "+ New category…" in the recurring form reveals a name box; picking a
+  // real category hides it again.
+  $("recCategory").addEventListener("change", function () {
+    syncRecNewCat();
+    if ($("recCategory").value === "__new__") $("recNewCategory").focus();
+  });
   $("addRecurring").addEventListener("click", function () {
     var amt = parseFloat($("recAmount").value);
     if (!amt || amt <= 0) { $("recAmount").focus(); return; }
@@ -1188,20 +1217,28 @@
     if (!day || day < 1 || day > 31) { $("recDay").focus(); return; }
     var note = $("recNote").value.trim();
     if (!note) { $("recNote").focus(); return; }
+    var cat;
+    if (recEntryType === "income") { cat = "Income"; }
+    else if ($("recCategory").value === "__new__") {
+      cat = $("recNewCategory").value.trim();
+      if (!cat) { $("recNewCategory").focus(); return; }
+      if (state.categories.indexOf(cat) === -1) { state.categories.push(cat); }
+    } else { cat = $("recCategory").value; }
     state.recurring = state.recurring || [];
     state.recurring.push({
       id: Date.now(),
       type: recEntryType,
       amount: Math.round(amt * 100) / 100,
-      category: recEntryType === "income" ? "Income" : $("recCategory").value,
+      category: cat,
       note: note,
       day: day,
       lastMonth: null
     });
-    $("recAmount").value = ""; $("recDay").value = ""; $("recNote").value = "";
+    $("recAmount").value = ""; $("recDay").value = ""; $("recNote").value = ""; $("recNewCategory").value = "";
     markDirty();
     save();
     generateRecurring(); // adds this month's transaction right away
+    renderCategories(); // the new item may change which categories are recurring
     renderRecurring(); render();
   });
 
@@ -1209,6 +1246,7 @@
     var amt = parseFloat($("budgetAmount").value);
     if (!amt || amt <= 0) { $("budgetAmount").focus(); return; }
     var cat = $("budgetCategory").value;
+    if (!cat) return; // no standard categories to budget for
     state.budgets[cat] = state.budgets[cat] || {};
     state.budgets[cat][monthKey(viewYear, viewMonth)] = Math.round(amt * 100) / 100;
     $("budgetAmount").value = "";
