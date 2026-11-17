@@ -1283,7 +1283,11 @@
       var line = rawLine.replace(/\s+/g, " ").trim();
       if (!line || line.length < 4) return;
       if (SKIP_LINE.test(line)) return;
-      if (/\b(payment|autopay|auto pay)\b/i.test(line)) return; // card payments, not spending
+      // Card payments and Samsung Pay lines are payment artifacts, not
+      // spending (Avi, 2026-11-16). "samsung pay" covers the long form
+      // some statements print; a bare "samsung" (buying a Samsung
+      // product) still imports.
+      if (/\b(payment|autopay|auto pay|sampay|samsung pay)\b/i.test(line)) return;
       // amount at end of line: $1,234.56 or 1234.56, optional trailing - or CR
       var am = line.match(/\$?\s?([\d,]+\.\d{2})\s*(-|CR)?\s*$/i);
       if (!am) return;
