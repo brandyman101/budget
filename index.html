@@ -85,8 +85,6 @@
   }
   /* Budgets */
   .budget-item { margin-bottom: 14px; }
-  .budget-group { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 16px 0 8px; }
-  .budget-group:first-child { margin-top: 0; }
   .budget-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
   .budget-head .cat { font-weight: 600; }
   .budget-head .nums { font-size: 0.85rem; color: var(--muted); }
@@ -807,18 +805,19 @@
     txsInMonth(viewYear, viewMonth).forEach(function (tx) {
       if (tx.type === "expense") spentByCat[tx.category] = (spentByCat[tx.category] || 0) + tx.amount;
     });
-    var cats = state.categories.filter(function (c) { return budgetFor(c, viewYear, viewMonth) > 0 || spentByCat[c] > 0; });
+    // Categories with a recurring item are hidden here — those live in the
+    // Recurring section, so the budgets list stays for the rest. (Grouping
+    // under Recurring/Standard headings was tried first, 2026-11-16, and
+    // replaced by hiding at Avi's request the same evening.)
+    var recCats = {};
+    state.recurring.forEach(function (r) { recCats[r.category] = true; });
+    var cats = state.categories.filter(function (c) { return !recCats[c] && (budgetFor(c, viewYear, viewMonth) > 0 || spentByCat[c] > 0); });
     if (!cats.length) {
-      budgetList.innerHTML = '<p class="empty">No budgets set yet. Pick a category and set a monthly amount below.</p>';
+      var hidden = state.categories.filter(function (c) { return recCats[c] && (budgetFor(c, viewYear, viewMonth) > 0 || spentByCat[c] > 0); });
+      budgetList.innerHTML = hidden.length
+        ? '<p class="empty">Recurring categories live in the Recurring section above.</p>'
+        : '<p class="empty">No budgets set yet. Pick a category and set a monthly amount below.</p>';
     } else {
-      // Group the list: categories with a recurring item under "Recurring",
-      // the rest under "Standard". Headings only appear when both groups
-      // have rows — a single group renders plain, as before.
-      var recCats = {};
-      state.recurring.forEach(function (r) { recCats[r.category] = true; });
-      var recGroup = cats.filter(function (c) { return recCats[c]; });
-      var stdGroup = cats.filter(function (c) { return !recCats[c]; });
-      var grouped = recGroup.length > 0 && stdGroup.length > 0;
       var n = 0;
       var rowHtml = function (c) {
         var bud = budgetFor(c, viewYear, viewMonth), spent = spentByCat[c] || 0;
@@ -833,12 +832,7 @@
           '<span class="nums' + (spent > bud && bud > 0 ? " over" : "") + '">' + esc(right) + '</span></div>' +
           '<div class="bar-track"><div class="bar-fill ' + cls + '" data-w="' + pct + '" style="width:0%;transition-delay:' + Math.min(n++ * 40, 400) + 'ms"></div></div></div>';
       };
-      var html = "";
-      if (grouped) html += '<div class="budget-group">Recurring</div>';
-      html += recGroup.map(rowHtml).join("");
-      if (grouped) html += '<div class="budget-group">Standard</div>';
-      html += stdGroup.map(rowHtml).join("");
-      budgetList.innerHTML = html;
+      budgetList.innerHTML = cats.map(rowHtml).join("");
     }
 
     // chart: last 6 months including viewed month
