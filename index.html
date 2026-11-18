@@ -1562,11 +1562,24 @@
   // Charges Details" — plural on both words. Bare "New Charges" must NOT
   // match: Amex summary lines start with it, e.g. "New Charges ABRAHAM
   // BRANDEL 6-02004 $0.00 $1,154.69".)
+  // A heading never carries a dollar amount, so any line with a "$" is
+  // skipped — that keeps summary lines like "Purchases $1,754.32" and
+  // interest-calculation rows like "Purchases 24.49% V N/A $0.00 $0.00"
+  // from matching. Discover prints the heading mid-line with the column
+  // headers ("TRANS. PURCHASES MERCHANT CATEGORY AMOUNT"), so "purchases"
+  // also matches anywhere in an all-caps line that doesn't end in a
+  // period — the caps rule keeps prose like "Earn 5% cash back on
+  // everyday purchases at ..." from matching.
   function keepPurchaseSection(text) {
     var lines = text.split(/\r?\n/);
     for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].replace(/\s+/g, " ").trim().toLowerCase();
+      var raw = lines[i].replace(/\s+/g, " ").trim();
+      if (raw.indexOf("$") !== -1) continue;
+      var line = raw.toLowerCase();
       if (/^(purchases|new charges? details?)(\s|$|[-:])/.test(line)) {
+        return lines.slice(i).join("\n");
+      }
+      if (/\bpurchases\b/.test(line) && !/[a-z]/.test(raw) && !/\.$/.test(raw)) {
         return lines.slice(i).join("\n");
       }
     }
