@@ -610,6 +610,10 @@
   }
   function monthKey(y, m) { return y + "-" + String(m + 1).padStart(2, "0"); }
   function keyOf(dateStr) { return dateStr.slice(0, 7); } // YYYY-MM-DD -> YYYY-MM
+  // Today's date in the DEVICE's timezone ("YYYY-MM-DD"). Never use
+  // toISOString() for this — it's UTC, so after 7pm Eastern it returns
+  // tomorrow's date and evening transactions land on the wrong day.
+  function localToday() { var d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
 
   // ---- elements ----
@@ -1133,7 +1137,7 @@
   $("addPool").addEventListener("click", function () {
     var amt = parseFloat(poolAmountEl.value);
     if (!amt || amt <= 0) { poolAmountEl.focus(); return; }
-    state.vacation.pool.push({ id: Date.now(), amount: Math.round(amt * 100) / 100, date: new Date().toISOString().slice(0, 10) });
+    state.vacation.pool.push({ id: Date.now(), amount: Math.round(amt * 100) / 100, date: localToday() });
     poolAmountEl.value = "";
     markDirty();
     save(); render();
@@ -1145,7 +1149,7 @@
     // No standard category to pick (every category is recurring): point at
     // the Add category box instead of saving a category-less transaction.
     if (entryType === "expense" && !categoryEl.value) { $("newCategory").focus(); return; }
-    var date = txDateEl.value || new Date().toISOString().slice(0, 10);
+    var date = txDateEl.value || localToday();
     state.txs.push({
       id: Date.now(),
       type: entryType,
@@ -1626,7 +1630,7 @@
       if (!desc || desc.length < 2) return;
       if (/^(total|balance|payment)\b/i.test(desc)) return;
       rows.push({
-        date: date || lastDate || new Date().toISOString().slice(0, 10),
+        date: date || lastDate || localToday(),
         desc: desc,
         amount: amount,
         type: isCredit ? "income" : "expense",
@@ -1932,7 +1936,7 @@
   });
 
   // init
-  txDateEl.value = new Date().toISOString().slice(0, 10);
+  txDateEl.value = localToday();
   renderCategories();
   render();
 })();
