@@ -686,11 +686,16 @@
     var k = monthKey(y, m);
     var list = (txs || []).filter(function (t) { return keyOf(t.date) === k; });
     if (!list.length) return out;
-    var income = 0, spent = 0, byCat = {}, biggest = null;
+    var income = 0, spent = 0, byCat = {}, stdByCat = {}, biggest = null;
     list.forEach(function (t) {
       if (t.type === "income") { income += t.amount; return; }
       spent += t.amount;
       byCat[t.category] = (byCat[t.category] || 0) + t.amount;
+      // The "biggest" lines skip auto-generated recurring transactions
+      // (they carry recurringId) — Rent would win every month otherwise.
+      // Totals (spent, byCat) still count them.
+      if (t.recurringId) return;
+      stdByCat[t.category] = (stdByCat[t.category] || 0) + t.amount;
       if (!biggest || t.amount > biggest.amount) biggest = t;
     });
     var daysInMonth = new Date(y, m + 1, 0).getDate();
@@ -727,9 +732,10 @@
       }
     });
 
-    // Biggest category.
+    // Biggest category (standard transactions only; the share is still
+    // against total spending).
     var topCat = null, topAmt = 0;
-    Object.keys(byCat).forEach(function (c) { if (byCat[c] > topAmt) { topAmt = byCat[c]; topCat = c; } });
+    Object.keys(stdByCat).forEach(function (c) { if (stdByCat[c] > topAmt) { topAmt = stdByCat[c]; topCat = c; } });
     if (topCat && spent > 0) {
       var share = Math.round(topAmt / spent * 100);
       out.push({ icon: "🏆", text: topCat + (isPast ? " was" : " is") + " your biggest category at " + money(topAmt) + " (" + share + "% of spending)" + (isPast ? " in " + monthName : "") + "." });
