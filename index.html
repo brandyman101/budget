@@ -195,6 +195,7 @@
     <button id="viewMonthly" class="active-view">Monthly</button>
     <button id="viewCashflow">📊 Cash Flow</button>
     <button id="viewVacation">✈️ Vacation</button>
+    <button id="viewPaychecks">💼 Paychecks</button>
   </div>
 
   <div class="card">
@@ -290,6 +291,45 @@
   <div class="card" id="cashflowCard" style="display:none">
     <h2 id="cashflowTitle">Cash flow</h2>
     <div id="cashflowBody"></div>
+  </div>
+
+  <div class="card" id="paychecksCard" style="display:none">
+    <div class="month-nav" id="payYearNav">
+      <button id="payPrevYear" aria-label="Previous year">‹ Prev</button>
+      <span class="month-label" id="payYearLabel"></span>
+      <button id="payNextYear" aria-label="Next year">Next ›</button>
+    </div>
+    <p class="hint" style="margin-top:0">1099 payments from each office, kept for tax season — with a running total per office and an estimated-tax set-aside.</p>
+    <div class="budget-edit">
+      <input type="number" id="payRate" inputmode="decimal" min="0" max="100" step="0.5" placeholder="Set-aside %">
+      <button class="btn-secondary" id="savePayRate">Set tax rate</button>
+    </div>
+    <p class="hint">Set aside this % of each 1099 paycheck for estimated taxes. Ask your CPA for your number — this is just the set-aside math.</p>
+    <div class="form-row">
+      <div>
+        <label for="payDate">Date</label>
+        <input type="date" id="payDate">
+      </div>
+      <div>
+        <label for="payOffice">Office</label>
+        <input type="text" id="payOffice" list="payOfficeList" placeholder="Office name" autocomplete="off">
+        <datalist id="payOfficeList"></datalist>
+      </div>
+      <div>
+        <label for="payAmount">Amount ($)</label>
+        <input type="number" id="payAmount" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+      </div>
+      <div>
+        <label for="payNote">Note (optional)</label>
+        <input type="text" id="payNote" placeholder="e.g. Nov 1–15, check #">
+      </div>
+    </div>
+    <button id="addPaycheck">Add paycheck</button>
+    <h2 style="margin-top:18px">By office · <span id="payOfficeYear"></span></h2>
+    <div id="payOfficeTotals"></div>
+    <h2 style="margin-top:18px">Paychecks · <span id="payListYear"></span></h2>
+    <div id="payList"></div>
+    <button class="btn-secondary" id="payExportCsv" style="margin-top:12px">Download CSV for your CPA</button>
   </div>
 
   <div class="card" id="recurringCard">
@@ -441,10 +481,10 @@
   setupCollapsible("txDetails", "txOpen", true);
   setupCollapsible("insightsDetails", "insightsOpen", true);
 
-  // View mode (Monthly | Vacation | Cash Flow) is per-device UI state,
-  // remembered locally like the collapsible sections — never synced.
+  // View mode (Monthly | Cash Flow | Vacation | Paychecks) is per-device
+  // UI state, remembered locally like the collapsible sections — never synced.
   var _savedView = loadUiState().viewMode;
-  var viewMode = (_savedView === "vacation" || _savedView === "cashflow") ? _savedView : "monthly";
+  var viewMode = (_savedView === "vacation" || _savedView === "cashflow" || _savedView === "paychecks") ? _savedView : "monthly";
   function setViewMode(mode) {
     viewMode = mode;
     var ui = loadUiState();
@@ -486,6 +526,7 @@
   function hasLocalData(d) {
     return (d.txs && d.txs.length > 0) ||
       (d.budgets && Object.keys(d.budgets).length > 0) ||
+      (d.paychecks && d.paychecks.length > 0) ||
       (d.categories && d.categories.length > DEFAULT_CATS.length);
   }
   function markDirty() { state.sync.dirty = true; }
@@ -496,9 +537,9 @@
   // are kept (the list stays tiny) and travel with the sync payload so
   // every device honors them.
   function normalizeDeleted(del) {
-    var out = { txs: [], recurring: [], pool: [] };
+    var out = { txs: [], recurring: [], pool: [], paychecks: [] };
     if (del) {
-      ["txs", "recurring", "pool"].forEach(function (kind) {
+      ["txs", "recurring", "pool", "paychecks"].forEach(function (kind) {
         (del[kind] || []).forEach(function (id) {
           var s = String(id);
           if (out[kind].indexOf(s) === -1) out[kind].push(s);
@@ -527,6 +568,8 @@
         d.budgets = d.budgets || {};
         d.sync = d.sync || {};
         d.recurring = d.recurring || [];
+        d.paychecks = Array.isArray(d.paychecks) ? d.paychecks : [];
+        d.taxRate = typeof d.taxRate === "number" && d.taxRate >= 0 ? d.taxRate : 0;
         d.deleted = normalizeDeleted(d.deleted);
         d.vacation = normalizeVacation(d.vacation);
         // State saved before the dirty flag existed: treat existing local
@@ -535,7 +578,7 @@
         return d;
       }
     } catch (e) { /* corrupted storage: start fresh */ }
-    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [], deleted: { txs: [], recurring: [], pool: [] }, vacation: { name: "Aruba", budget: 0, pool: [] } };
+    return { txs: [], categories: DEFAULT_CATS.slice(), budgets: {}, sync: {}, recurring: [], paychecks: [], taxRate: 0, deleted: { txs: [], recurring: [], pool: [], paychecks: [] }, vacation: { name: "Aruba", budget: 0, pool: [] } };
   }
   // Trip fund: { name, budget, pool: [{id, amount, date}] }. Saved data
   // from before this feature has no vacation field; default the trip to
@@ -629,6 +672,7 @@
       budgetsCard = $("budgetsCard"), chartCard = $("chartCard"),
       tripCard = $("tripCard"), monthNav = $("monthNav"),
       cashflowCard = $("cashflowCard"), importCard = $("importCard"),
+      paychecksCard = $("paychecksCard"),
       txCard = $("txCard"), addForm = $("addForm"),
       tripNameEl = $("tripName"), tripBudgetEl = $("tripBudget"), poolAmountEl = $("poolAmount"),
       poolList = $("poolList"), poolHint = $("poolHint");
@@ -831,20 +875,23 @@
     state.vacation = normalizeVacation(state.vacation);
     var vac = viewMode === "vacation";
     var cf = viewMode === "cashflow";
+    var pay = viewMode === "paychecks";
     // Show the right sections for the mode.
     tripCard.style.display = vac ? "" : "none";
     cashflowCard.style.display = cf ? "" : "none";
-    insightsCard.style.display = (vac || cf) ? "none" : "";
-    recurringCard.style.display = (vac || cf) ? "none" : "";
-    budgetsCard.style.display = (vac || cf) ? "none" : "";
-    chartCard.style.display = (vac || cf) ? "none" : "";
-    importCard.style.display = cf ? "none" : "";
-    txCard.style.display = cf ? "none" : "";
-    addForm.style.display = cf ? "none" : "";
-    monthNav.style.display = vac ? "none" : "";
+    paychecksCard.style.display = pay ? "" : "none";
+    insightsCard.style.display = (vac || cf || pay) ? "none" : "";
+    recurringCard.style.display = (vac || cf || pay) ? "none" : "";
+    budgetsCard.style.display = (vac || cf || pay) ? "none" : "";
+    chartCard.style.display = (vac || cf || pay) ? "none" : "";
+    importCard.style.display = (cf || pay) ? "none" : "";
+    txCard.style.display = (cf || pay) ? "none" : "";
+    addForm.style.display = (cf || pay) ? "none" : "";
+    monthNav.style.display = (vac || pay) ? "none" : "";
     $("viewMonthly").className = viewMode === "monthly" ? "active-view" : "";
     $("viewVacation").className = vac ? "active-view" : "";
     $("viewCashflow").className = cf ? "active-view" : "";
+    $("viewPaychecks").className = pay ? "active-view" : "";
     $("addTx").textContent = vac ? "Add to trip" : "Add transaction";
     if (vac) {
       renderVacationHeader();
@@ -858,6 +905,11 @@
       monthLabel.textContent = MONTHS[viewMonth] + " " + viewYear;
       renderCashflow();
       animateBars();
+      return;
+    }
+    if (pay) {
+      renderPaychecksHeader();
+      renderPaychecks();
       return;
     }
     var b = balance();
@@ -1033,6 +1085,134 @@
     monthSaved.textContent = money(net);
     monthSaved.className = "value" + (net < 0 ? " neg" : net > 0 ? " pos" : "");
   }
+  // ---- paychecks (1099 office payments, kept for tax season) ----
+  // A paycheck is { id, date, office, amount, note, kind }. kind is
+  // "1099" today; "w2" comes later, when Avi switches — the set-aside
+  // only ever applies to 1099 (W-2 already has tax withheld). Paychecks
+  // are a separate ledger from transactions: they don't flow into the
+  // monthly income/budgets, so the tax record stays clean.
+  var payYear = new Date().getFullYear();
+  function paycheckTotals(paychecks, year, taxRate) {
+    var y = String(year), rate = (taxRate || 0) / 100;
+    var out = { count: 0, gross: 0, setAside: 0, net: 0, byOffice: {} };
+    (paychecks || []).forEach(function (p) {
+      if (!p || String(p.date || "").slice(0, 4) !== y) return;
+      var amt = Number(p.amount) || 0;
+      out.count++;
+      out.gross += amt;
+      // A missing kind means "created before kinds existed" — that's 1099.
+      if (p.kind !== "w2") out.setAside += amt * rate;
+      var office = (p.office || "").trim() || "(no office)";
+      out.byOffice[office] = (out.byOffice[office] || 0) + amt;
+    });
+    out.gross = Math.round(out.gross * 100) / 100;
+    out.setAside = Math.round(out.setAside * 100) / 100;
+    out.net = Math.round((out.gross - out.setAside) * 100) / 100;
+    return out;
+  }
+  function csvCell(s) {
+    s = String(s == null ? "" : s);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  function paychecksCsv(paychecks, year, taxRate) {
+    var rows = (paychecks || []).filter(function (p) { return p && String(p.date || "").slice(0, 4) === String(year); })
+      .slice().sort(function (a, b) { return String(a.date).localeCompare(String(b.date)); });
+    var t = paycheckTotals(paychecks, year, taxRate);
+    var lines = ["Date,Office,Type,Gross,Est. tax set aside,Note"];
+    rows.forEach(function (p) {
+      var kind = p.kind === "w2" ? "W-2" : "1099";
+      var aside = kind === "1099" ? Math.round((Number(p.amount) || 0) * (taxRate || 0)) / 100 : 0;
+      lines.push([p.date, csvCell(p.office), kind, (Number(p.amount) || 0).toFixed(2), aside.toFixed(2), csvCell(p.note || "")].join(","));
+    });
+    lines.push(["TOTAL", "", "", t.gross.toFixed(2), t.setAside.toFixed(2), ""].join(","));
+    return lines.join("\n");
+  }
+  function renderPaychecksHeader() {
+    var t = paycheckTotals(state.paychecks, payYear, state.taxRate);
+    balanceLabel.textContent = "1099 income · " + payYear;
+    balanceValue.textContent = money(t.gross);
+    balanceValue.className = "value pos";
+    monthIncomeLabel.textContent = "Set aside for taxes";
+    monthIncome.textContent = money(t.setAside);
+    monthIncome.className = "value";
+    monthSpentLabel.textContent = "After set-aside";
+    monthSpent.textContent = money(t.net);
+    monthSpent.className = "value pos";
+    monthSavedLabel.textContent = "Paychecks";
+    monthSaved.textContent = String(t.count);
+    monthSaved.className = "value";
+  }
+  function renderPaychecks() {
+    var t = paycheckTotals(state.paychecks, payYear, state.taxRate);
+    $("payYearLabel").textContent = payYear;
+    $("payOfficeYear").textContent = payYear;
+    $("payListYear").textContent = payYear;
+    var rateEl = $("payRate");
+    if (document.activeElement !== rateEl) rateEl.value = state.taxRate ? String(state.taxRate) : "";
+    if (!$("payDate").value) $("payDate").value = localToday();
+    // Office suggestions: every office already logged, any year.
+    var offices = {};
+    (state.paychecks || []).forEach(function (p) { if (p.office) offices[p.office.trim()] = true; });
+    $("payOfficeList").innerHTML = Object.keys(offices).sort().map(function (o) { return "<option value=\"" + esc(o) + "\">"; }).join("");
+    var officeNames = Object.keys(t.byOffice).sort(function (a, b) { return t.byOffice[b] - t.byOffice[a]; });
+    $("payOfficeTotals").innerHTML = officeNames.length
+      ? officeNames.map(function (o) {
+          return '<div class="pool-row"><span>' + esc(o) + '</span><span><strong>' + money(t.byOffice[o]) + '</strong></span></div>';
+        }).join("")
+      : '<p class="empty">No paychecks logged for ' + payYear + ' yet.</p>';
+    var rows = (state.paychecks || []).filter(function (p) { return p && String(p.date || "").slice(0, 4) === String(payYear); })
+      .slice().sort(txByDateDesc);
+    $("payList").innerHTML = rows.length
+      ? rows.map(function (p) {
+          var aside = (p.kind !== "w2" && state.taxRate) ? " — set aside " + money(Math.round(p.amount * state.taxRate) / 100) : "";
+          var note = p.note ? " · " + esc(p.note) : "";
+          return '<div class="tx-row"><span class="tx-note">' + esc(p.date) + ' · ' + esc(p.office || "") + note + aside + '</span>' +
+            '<span class="tx-amt">' + money(p.amount) + ' <button class="tx-del" data-pay="' + p.id + '" aria-label="Delete">×</button></span></div>';
+        }).join("")
+      : '<p class="empty">No paychecks logged for ' + payYear + ' yet.</p>';
+  }
+  $("viewPaychecks").addEventListener("click", function () { setViewMode("paychecks"); });
+  $("payPrevYear").addEventListener("click", function () { payYear--; render(); });
+  $("payNextYear").addEventListener("click", function () { payYear++; render(); });
+  $("savePayRate").addEventListener("click", function () {
+    var r = parseFloat($("payRate").value);
+    state.taxRate = isNaN(r) ? 0 : Math.min(100, Math.max(0, r));
+    markDirty(); save(); render();
+  });
+  $("addPaycheck").addEventListener("click", function () {
+    var office = $("payOffice").value.trim();
+    var amt = parseFloat($("payAmount").value);
+    if (!office) { $("payOffice").focus(); return; }
+    if (!amt || amt <= 0) { $("payAmount").focus(); return; }
+    (state.paychecks = state.paychecks || []).push({
+      id: Date.now(),
+      date: $("payDate").value || localToday(),
+      office: office,
+      amount: Math.round(amt * 100) / 100,
+      note: $("payNote").value.trim(),
+      kind: "1099"
+    });
+    $("payAmount").value = "";
+    $("payNote").value = "";
+    markDirty(); save(); render();
+  });
+  $("payList").addEventListener("click", function (e) {
+    var btn = e.target.closest ? e.target.closest("[data-pay]") : null;
+    if (!btn) return;
+    var id = btn.getAttribute("data-pay");
+    tombstone("paychecks", id);
+    state.paychecks = (state.paychecks || []).filter(function (p) { return String(p.id) !== String(id); });
+    markDirty(); save(); render();
+  });
+  $("payExportCsv").addEventListener("click", function () {
+    var blob = new Blob([paychecksCsv(state.paychecks, payYear, state.taxRate)], { type: "text/csv" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "paychecks-" + payYear + ".csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
   // Doughnut chart colors, one per category by its position in the
   // category list (so a category keeps its color across months; the list
   // cycles for custom categories beyond the palette).
@@ -1289,7 +1469,7 @@
         var d = JSON.parse(r.result);
         if (!Array.isArray(d.txs)) throw new Error("bad file");
         var del = normalizeDeleted(d.deleted);
-        state = { txs: d.txs.filter(function (t) { return del.txs.indexOf(String(t.id)) === -1; }), categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: (d.recurring || []).filter(function (r) { return del.recurring.indexOf(String(r.id)) === -1; }), deleted: del, vacation: normalizeVacation(d.vacation) };
+        state = { txs: d.txs.filter(function (t) { return del.txs.indexOf(String(t.id)) === -1; }), categories: ensureDefaultCats(d.categories || DEFAULT_CATS.slice()), budgets: d.budgets || {}, sync: d.sync || state.sync, recurring: (d.recurring || []).filter(function (r) { return del.recurring.indexOf(String(r.id)) === -1; }), paychecks: (d.paychecks || []).filter(function (p) { return del.paychecks.indexOf(String(p.id)) === -1; }), taxRate: typeof d.taxRate === "number" ? d.taxRate : 0, deleted: del, vacation: normalizeVacation(d.vacation) };
         state.vacation.pool = withoutDead(state.vacation.pool, "pool");
         state.sync.dirty = true;
         save(); renderCategories(); render();
@@ -1315,7 +1495,7 @@
     showSync(state.sync.url ? "Sync settings saved." : "Sync is off.", state.sync.url ? "ok" : "");
   });
   function syncPayload() {
-    return { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, deleted: normalizeDeleted(state.deleted), vacation: normalizeVacation(state.vacation) };
+    return { txs: state.txs, categories: state.categories, budgets: state.budgets, recurring: state.recurring, paychecks: state.paychecks || [], taxRate: state.taxRate || 0, deleted: normalizeDeleted(state.deleted), vacation: normalizeVacation(state.vacation) };
   }
   // ---- end-to-end encryption for sync (2026-11-17) ----
   // With a passphrase set, the sync payload is encrypted on this device
@@ -1448,7 +1628,8 @@
       state.deleted = normalizeDeleted({
         txs: ((state.deleted && state.deleted.txs) || []).concat((remote.data.deleted && remote.data.deleted.txs) || []),
         recurring: ((state.deleted && state.deleted.recurring) || []).concat((remote.data.deleted && remote.data.deleted.recurring) || []),
-        pool: ((state.deleted && state.deleted.pool) || []).concat((remote.data.deleted && remote.data.deleted.pool) || [])
+        pool: ((state.deleted && state.deleted.pool) || []).concat((remote.data.deleted && remote.data.deleted.pool) || []),
+        paychecks: ((state.deleted && state.deleted.paychecks) || []).concat((remote.data.deleted && remote.data.deleted.paychecks) || [])
       });
       var mine = state.txs.length, theirs = remote.data.txs.length;
       var byId = {};
@@ -1457,9 +1638,15 @@
       var recById = {};
       (state.recurring || []).concat(remote.data.recurring || []).forEach(function (r) { recById[r.id] = r; });
       state.recurring = withoutDead(Object.keys(recById).map(function (k) { return recById[k]; }), "recurring");
+      var payById = {};
+      (state.paychecks || []).concat(remote.data.paychecks || []).forEach(function (p) { if (p && p.id) payById[p.id] = p; });
+      state.paychecks = withoutDead(Object.keys(payById).map(function (k) { return payById[k]; }), "paychecks");
       if ((remote.updatedAt || 0) > (state.sync.lastSyncAt || 0) && theirs >= mine) {
         state.categories = remote.data.categories || state.categories;
         state.budgets = remote.data.budgets || state.budgets;
+        // Tax set-aside rate adopts the newer copy (older remotes have no
+        // taxRate field — never let that reset the local rate).
+        if (typeof remote.data.taxRate === "number") state.taxRate = remote.data.taxRate;
         // Trip name/budget adopt the newer copy (older remotes have no
         // vacation field — never let that reset the local trip).
         if (remote.data.vacation) {
