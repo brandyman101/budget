@@ -1,4 +1,4 @@
-/* Budget Tracker — service worker.
+/* Brandel Budget — service worker.
    Makes the site installable and usable offline.
    - App shell (HTML/manifest/icons) is precached on install.
    - Navigations are network-first with a cached-shell fallback, so a new
@@ -6,14 +6,14 @@
    - Same-origin GETs are stale-while-revalidate.
    - POSTs (sync) are never cached and always go to the network.
    - Cross-origin requests (CDN libraries) go straight to the network. */
-var CACHE = 'budget-tracker-v20261117a';
+var CACHE = 'budget-tracker-v20261124a';
 var SHELL = [
   './',
   'index.html',
   'manifest.json',
-  'icon-192.png',
-  'icon-512.png',
-  'icon-512-maskable.png'
+  'logo-192.png',
+  'logo-512.png',
+  'logo-512-maskable.png'
 ];
 
 self.addEventListener('install', function (event) {
