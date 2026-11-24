@@ -6,6 +6,15 @@
 <title>Budget Tracker</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#3d7a4e">
+<script>
+  // Apply the saved theme before first paint (no light flash in dark mode).
+  // Same source of truth as the app: budget-ui-v1.theme, else the OS setting.
+  try {
+    var _ui = JSON.parse(localStorage.getItem("budget-ui-v1") || "{}");
+    var _theme = _ui.theme || (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    if (_theme === "dark") document.documentElement.setAttribute("data-theme", "dark");
+  } catch (e) { /* private mode: stay light */ }
+</script>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -22,7 +31,28 @@
     --red: #b3402e;
     --amber: #d99a2b;
     --line: #e8ddd0;
+    --track: #efe7d8;
+    --header-bg: #2b2118;
+    --header-fg: #f5efe4;
+    --header-sub: #c9bba6;
     --radius: 14px;
+    color-scheme: light;
+  }
+  /* Dark mode (2026-11-23): warm dark palette. The header stays dark in
+     both themes, so it has its own variables that are not overridden here. */
+  html[data-theme="dark"] {
+    --cream: #1c1815;
+    --card: #292219;
+    --ink: #f0e9dd;
+    --muted: #a99a86;
+    --terra: #d98a68;
+    --terra-dark: #c96f4a;
+    --green: #5da271;
+    --red: #d9735f;
+    --amber: #e0aa4a;
+    --line: #3d342a;
+    --track: #3d342a;
+    color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -30,16 +60,22 @@
     background: var(--cream);
     color: var(--ink);
     line-height: 1.45;
-    padding-bottom: 48px;
+    /* Room for the fixed bottom tab bar + floating + button. */
+    padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+  }
+  button {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
   }
   header {
-    background: var(--ink);
-    color: #f5efe4;
-    padding: 20px 16px 24px;
+    background: var(--header-bg);
+    color: var(--header-fg);
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 16px 24px;
     text-align: center;
   }
   header h1 { font-family: Georgia, "Times New Roman", serif; font-size: 1.6rem; font-weight: 600; }
-  header p { color: #c9bba6; font-size: 0.85rem; margin-top: 4px; }
+  header p { color: var(--header-sub); font-size: 0.85rem; margin-top: 4px; }
   main { max-width: 720px; margin: 0 auto; padding: 16px; }
   .card {
     background: var(--card);
@@ -77,7 +113,7 @@
   label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
   input, select {
     width: 100%; padding: 10px; border: 1.5px solid var(--line); border-radius: 10px;
-    font-size: 1rem; background: #fff; color: var(--ink);
+    font-size: 1rem; background: var(--card); color: var(--ink);
   }
   input:focus, select:focus { outline: none; border-color: var(--terra); }
   .btn-primary {
@@ -95,7 +131,7 @@
   .budget-head .cat { font-weight: 600; }
   .budget-head .nums { font-size: 0.85rem; color: var(--muted); }
   .budget-head .nums.over { color: var(--red); font-weight: 700; }
-  .bar-track { height: 12px; background: #efe7d8; border-radius: 6px; overflow: hidden; }
+  .bar-track { height: 12px; background: var(--track); border-radius: 6px; overflow: hidden; }
   .bar-fill { height: 100%; border-radius: 6px; background: var(--green); transition: width 0.5s ease-out; }
   .bar-fill.warn { background: var(--amber); }
   .bar-fill.over { background: var(--red); }
@@ -148,8 +184,42 @@
   .insight { display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.95rem; }
   .insight:last-child { border-bottom: none; }
   .insight-icon { flex: none; }
-  .view-toggle { margin-bottom: 12px; }
-  .view-toggle button.active-view { background: var(--ink); border-color: var(--ink); color: #fff; }
+  /* Sticky summary: the balance boxes stay pinned to the top while scrolling. */
+  #summaryCard { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; }
+  /* Bottom tab bar (2026-11-23): fixed navigation, icon over label, like a
+     native app. Constrained to the content width and centered on desktop. */
+  .tab-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    max-width: 720px; margin: 0 auto;
+    display: flex;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -2px 10px rgba(43,33,24,0.08);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .tab-bar button {
+    flex: 1; min-height: 52px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+    background: none; border: none; cursor: pointer;
+    color: var(--muted); font-size: 0.68rem; font-weight: 600;
+    padding: 4px 2px;
+    user-select: none; -webkit-user-select: none;
+  }
+  .tab-bar button .tab-icon { font-size: 1.25rem; line-height: 1; }
+  .tab-bar button.active-view { color: var(--green); }
+  /* Floating + button: jumps to the add-transaction form. Sits just above
+     the tab bar, inside the content column on wide screens. */
+  .fab {
+    position: fixed; z-index: 30;
+    right: max(16px, calc(50% - 360px + 16px));
+    bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    width: 56px; height: 56px; border-radius: 50%; border: none;
+    background: var(--green); color: #fff;
+    font-size: 2rem; line-height: 1; cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fab:active { transform: scale(0.95); }
   .pool-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
   .pool-row:last-child { border-bottom: none; }
   .hint { font-size: 0.85rem; color: var(--muted); margin-top: 6px; }
@@ -191,14 +261,7 @@
 </header>
 <main>
 
-  <div class="type-toggle view-toggle">
-    <button id="viewMonthly" class="active-view">Monthly</button>
-    <button id="viewCashflow">📊 Cash Flow</button>
-    <button id="viewVacation">✈️ Vacation</button>
-    <button id="viewPaychecks">💼 Paychecks</button>
-  </div>
-
-  <div class="card">
+  <div class="card" id="summaryCard">
     <div class="balance-row">
       <div class="balance-box">
         <div class="label" id="balanceLabel">Balance</div>
@@ -412,6 +475,11 @@
   <div class="card">
     <details>
       <summary>Settings &amp; backup</summary>
+      <div class="settings-row" style="align-items:center">
+        <label style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="darkModeToggle" style="width:auto"> Dark mode
+        </label>
+      </div>
       <div class="settings-row">
         <button class="btn-secondary" id="exportBtn">Export data (JSON)</button>
         <button class="btn-secondary" id="importBtn">Import data</button>
@@ -437,6 +505,15 @@
   </div>
 
 </main>
+
+<nav class="tab-bar">
+  <button id="viewMonthly" class="active-view"><span class="tab-icon">🏠</span><span>Monthly</span></button>
+  <button id="viewCashflow"><span class="tab-icon">📊</span><span>Cash Flow</span></button>
+  <button id="viewVacation"><span class="tab-icon">✈️</span><span>Vacation</span></button>
+  <button id="viewPaychecks"><span class="tab-icon">💼</span><span>Paychecks</span></button>
+</nav>
+<button class="fab" id="fabAdd" aria-label="Add transaction">+</button>
+
 <script>
 (function () {
   "use strict";
@@ -495,6 +572,33 @@
     try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* private mode: don't remember */ }
     render();
   }
+
+  // ---- dark mode (per-device UI state, never synced) ----
+  // Saved choice wins; with no saved choice, follow the OS setting.
+  // (A matching snippet in <head> applies the theme before first paint.)
+  function currentTheme() {
+    var saved = loadUiState().theme;
+    if (saved === "dark" || saved === "light") return saved;
+    return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#1c1815" : "#3d7a4e");
+    // NOTE: this runs before `var $` is defined below — use getElementById
+    // here, not $, or the whole app fails to start (2026-11-16 lesson).
+    document.getElementById("darkModeToggle").checked = theme === "dark";
+  }
+  function setTheme(theme) {
+    var ui = loadUiState();
+    ui.theme = theme;
+    try { localStorage.setItem(UI_KEY, JSON.stringify(ui)); } catch (e) { /* private mode: don't remember */ }
+    applyTheme(theme);
+  }
+  document.getElementById("darkModeToggle").addEventListener("change", function () {
+    setTheme(this.checked ? "dark" : "light");
+  });
+  applyTheme(currentTheme());
 
   // Add any default categories missing from a saved list (e.g. Travel,
   // added after the data was first saved), in their default position:
@@ -1331,6 +1435,13 @@
   $("viewMonthly").addEventListener("click", function () { setViewMode("monthly"); });
   $("viewVacation").addEventListener("click", function () { setViewMode("vacation"); });
   $("viewCashflow").addEventListener("click", function () { setViewMode("cashflow"); });
+  // Floating + button: jump to the add-transaction form (the form lives
+  // in Monthly/Vacation mode, so switch there first if needed).
+  $("fabAdd").addEventListener("click", function () {
+    if (viewMode === "cashflow" || viewMode === "paychecks") setViewMode("monthly");
+    addForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(function () { $("amount").focus({ preventScroll: true }); }, 450);
+  });
   $("saveTrip").addEventListener("click", function () {
     var name = tripNameEl.value.trim();
     var bud = parseFloat(tripBudgetEl.value);
