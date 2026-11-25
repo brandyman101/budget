@@ -6,14 +6,14 @@
    - Same-origin GETs are stale-while-revalidate.
    - POSTs (sync) are never cached and always go to the network.
    - Cross-origin requests (CDN libraries) go straight to the network. */
-var CACHE = 'budget-tracker-v20261124a';
+var CACHE = 'budget-tracker-v20261124b';
 var SHELL = [
   './',
   'index.html',
   'manifest.json',
-  'logo-192.png',
-  'logo-512.png',
-  'logo-512-maskable.png'
+  'logo-mark-192.png',
+  'logo-mark-512.png',
+  'logo-mark-512-maskable.png'
 ];
 
 self.addEventListener('install', function (event) {
