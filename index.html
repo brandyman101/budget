@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Brandel Budget</title>
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#3d7a4e">
+<meta name="theme-color" content="#58b531">
 <script>
   // Apply the saved theme before first paint (no light flash in dark mode).
   // Same source of truth as the app: budget-ui-v1.theme, else the OS setting.
@@ -30,38 +30,42 @@
     font-style: normal;
     font-display: swap;
   }
+  /* Sunny palette (2026-11-24): Avi picked it from the color preview.
+     Light background whitened a touch per his "a little whiter" (#faf3e0
+     in the preview -> #fffaf0 here); every other value is the preview's. */
   :root {
-    --cream: #faf6ef;
-    --card: #ffffff;
-    --ink: #2b2118;
-    --muted: #8a7a6a;
-    --terra: #c96f4a;
-    --terra-dark: #a85434;
-    --green: #3d7a4e;
-    --red: #b3402e;
-    --amber: #d99a2b;
-    --line: #e8ddd0;
-    --track: #efe7d8;
-    --header-bg: #2b2118;
-    --header-fg: #f5efe4;
-    --header-sub: #c9bba6;
+    --cream: #fffaf0;
+    --card: #fffdf4;
+    --ink: #2d2412;
+    --muted: #8f7c58;
+    --terra: #ff6f61;
+    --terra-dark: #d95e52;
+    --green: #58b531;
+    --red: #e2483a;
+    --amber: #ffb703;
+    --line: #eee0bd;
+    --track: #f7ecd2;
+    --header-bg: #2e2a14;
+    --header-fg: #fdf6dd;
+    --header-sub: #cfc493;
     --radius: 14px;
     color-scheme: light;
   }
-  /* Dark mode (2026-11-23): warm dark palette. The header stays dark in
-     both themes, so it has its own variables that are not overridden here. */
+  /* Dark mode (Sunny palette, 2026-11-24). Header text/subtext match the
+     light theme, but the header background is darker (#23200f). */
   html[data-theme="dark"] {
-    --cream: #1c1815;
-    --card: #292219;
-    --ink: #f0e9dd;
-    --muted: #a99a86;
-    --terra: #d98a68;
-    --terra-dark: #c96f4a;
-    --green: #5da271;
-    --red: #d9735f;
-    --amber: #e0aa4a;
-    --line: #3d342a;
-    --track: #3d342a;
+    --cream: #1c1910;
+    --card: #2a2615;
+    --ink: #fdf6de;
+    --muted: #bcb086;
+    --terra: #ff8a75;
+    --terra-dark: #ff6f61;
+    --green: #7ed957;
+    --red: #ff7a66;
+    --amber: #ffc93c;
+    --line: #454022;
+    --track: #454022;
+    --header-bg: #23200f;
     color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -598,7 +602,7 @@
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", theme === "dark" ? "#1c1815" : "#3d7a4e");
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#1c1910" : "#58b531");
     // NOTE: this runs before `var $` is defined below — use getElementById
     // here, not $, or the whole app fails to start (2026-11-16 lesson).
     document.getElementById("darkModeToggle").checked = theme === "dark";
