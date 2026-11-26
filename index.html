@@ -1040,7 +1040,9 @@
     var b = balance();
     balanceLabel.textContent = "Balance";
     balanceValue.textContent = money(b);
-    balanceValue.className = "value" + (b < 0 ? " neg" : b > 0 ? " pos" : "");
+    /* Balance stays black (the plain ink color) in both themes — no
+       green/red by sign (Avi's ask, 2026-11-25). */
+    balanceValue.className = "value";
     var t = monthTotals(viewYear, viewMonth);
     monthIncome.textContent = money(t.income);
     /* Income is always green — set explicitly for the same reason as
@@ -1207,7 +1209,7 @@
     var b = balance();
     balanceLabel.textContent = "Balance";
     balanceValue.textContent = money(b);
-    balanceValue.className = "value" + (b < 0 ? " neg" : b > 0 ? " pos" : "");
+    balanceValue.className = "value"; // Balance stays black, as in Monthly.
     var t = monthTotals(viewYear, viewMonth);
     monthIncomeLabel.textContent = "Money in · " + MONTHS[viewMonth];
     monthIncome.textContent = money(t.income);
