@@ -1043,6 +1043,11 @@
     balanceValue.className = "value" + (b < 0 ? " neg" : b > 0 ? " pos" : "");
     var t = monthTotals(viewYear, viewMonth);
     monthIncome.textContent = money(t.income);
+    /* Income is always green — set explicitly for the same reason as
+       Spent below: the Paychecks header reuses this box uncolored, and
+       without this line the plain color would stick after switching
+       back to Monthly (found in live verification, 2026-11-25). */
+    monthIncome.className = "value pos";
     monthSpent.textContent = money(t.spent);
     /* Spent is always red (2026-11-25, Avi's ask). The class must be set
        here, not just in the HTML: the Paychecks header reuses this box
