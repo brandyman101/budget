@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Brandel Budget</title>
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#58b531">
+<meta name="theme-color" content="#00b368">
 <script>
   // Apply the saved theme before first paint (no light flash in dark mode).
   // Same source of truth as the app: budget-ui-v1.theme, else the OS setting.
@@ -30,42 +30,42 @@
     font-style: normal;
     font-display: swap;
   }
-  /* Sunny palette (2026-11-24): Avi picked it from the color preview.
-     Light background whitened a touch per his "a little whiter" (#faf3e0
-     in the preview -> #fffaf0 here); every other value is the preview's. */
+  /* Clean bold palette (2026-11-25): Avi picked it from the color preview
+     (replacing Sunny after one day). Values are the preview's, verbatim. */
   :root {
-    --cream: #fffaf0;
-    --card: #fffdf4;
-    --ink: #2d2412;
-    --muted: #8f7c58;
-    --terra: #ff6f61;
-    --terra-dark: #d95e52;
-    --green: #58b531;
-    --red: #e2483a;
-    --amber: #ffb703;
-    --line: #eee0bd;
-    --track: #f7ecd2;
-    --header-bg: #2e2a14;
-    --header-fg: #fdf6dd;
-    --header-sub: #cfc493;
+    --cream: #ffffff;
+    --card: #ffffff;
+    --ink: #0e130f;
+    --muted: #5c665e;
+    --terra: #ff6a00;
+    --terra-dark: #d95a00;
+    --green: #00b368;
+    --red: #e5484d;
+    --amber: #ffae00;
+    --line: #e2e6e2;
+    --track: #e9ede9;
+    --header-bg: #0e130f;
+    --header-fg: #ffffff;
+    --header-sub: #a7b3a9;
     --radius: 14px;
     color-scheme: light;
   }
-  /* Dark mode (Sunny palette, 2026-11-24). Header text/subtext match the
-     light theme, but the header background is darker (#23200f). */
+  /* Dark mode (Clean bold palette, 2026-11-25). Header text matches the
+     light theme; the header background and subtext differ. */
   html[data-theme="dark"] {
-    --cream: #1c1910;
-    --card: #2a2615;
-    --ink: #fdf6de;
-    --muted: #bcb086;
-    --terra: #ff8a75;
-    --terra-dark: #ff6f61;
-    --green: #7ed957;
-    --red: #ff7a66;
-    --amber: #ffc93c;
-    --line: #454022;
-    --track: #454022;
-    --header-bg: #23200f;
+    --cream: #0a0d0b;
+    --card: #151916;
+    --ink: #f2f6f2;
+    --muted: #98a49a;
+    --terra: #ff8a3c;
+    --terra-dark: #ff6a00;
+    --green: #2fe38f;
+    --red: #ff6f6f;
+    --amber: #ffc233;
+    --line: #242a25;
+    --track: #242a25;
+    --header-bg: #050706;
+    --header-sub: #9fb0a2;
     color-scheme: dark;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -602,7 +602,7 @@
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme === "dark" ? "dark" : "light");
     var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", theme === "dark" ? "#1c1910" : "#58b531");
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#0a0d0b" : "#00b368");
     // NOTE: this runs before `var $` is defined below — use getElementById
     // here, not $, or the whole app fails to start (2026-11-16 lesson).
     document.getElementById("darkModeToggle").checked = theme === "dark";
@@ -1044,6 +1044,11 @@
     var t = monthTotals(viewYear, viewMonth);
     monthIncome.textContent = money(t.income);
     monthSpent.textContent = money(t.spent);
+    /* Spent is always red (2026-11-25, Avi's ask). The class must be set
+       here, not just in the HTML: the Paychecks header reuses this box
+       with "value pos", and without this line the green would stick
+       after switching back to Monthly. */
+    monthSpent.className = "value neg";
     var saved = t.income - t.spent;
     monthSaved.textContent = money(saved);
     monthSaved.className = "value" + (saved < 0 ? " neg" : saved > 0 ? " pos" : "");
